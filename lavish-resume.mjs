@@ -94,7 +94,7 @@ export function collectBeads(model, idx) {
   return { beads: [...byId.values()], unmapped };
 }
 
-const GLYPH = { CONFIRMED: '✅', STALE: '⚠️', UNCONFIRMED: '❌' };
+export const GLYPH = { CONFIRMED: '✅', STALE: '⚠️', UNCONFIRMED: '❌' };
 const LABEL = { CONFIRMED: 'confirmed', STALE: 'edited since confirmed', UNCONFIRMED: 'unconfirmed' };
 
 export function renderPage(data, model, inv, idx, resumeId) {
@@ -198,9 +198,9 @@ ${rows}
 
 // ── payload mode: the PDF's own HTML, annotated ─────────────────────────────
 
-const unescapeHtml = (s) => s.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'");
-const norm = (s) => unescapeHtml(String(s)).replace(/\*\*/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-const PAYLOAD_CSS = `
+export const unescapeHtml = (s) => s.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'");
+export const norm = (s) => unescapeHtml(String(s)).replace(/\*\*/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+export const PAYLOAD_CSS = `
 <style id="lavish-overlay">
   [data-bead] { position: relative; }
   [data-status="UNCONFIRMED"], [data-status="STALE"] { box-shadow: -3px 0 0 #c00000; }
