@@ -57,7 +57,7 @@ export function toPayload(d) {
     candidate: candidateOf(d.header),
     summary: d.summary ?? '',
     skills: d.skills ? [{ category: 'Skills', items: splitTop(d.skills) }] : [],
-    experience: (d.experience ?? []).map((e) => ({ company: e.org || e.title, role: e.org ? e.title : '', dates: e.meta ?? '', location: '', bullets: e.bullets ?? [] })),
+    experience: (d.experience ?? []).map((e) => ({ company: e.org || e.title, role: e.title, dates: e.meta ?? '', location: '', bullets: e.bullets ?? [] })),
     projects: (d.projects ?? []).map((p) => ({ name: p.title, description: p.meta ?? '', bullets: p.bullets ?? [] })),
     education: (d.education ?? []).map(educationOf),
   };
