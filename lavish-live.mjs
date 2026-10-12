@@ -38,10 +38,10 @@ import { basename, dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { GLYPH, PAYLOAD_CSS, norm, unescapeHtml } from './lavish-resume.mjs';
-import { beadIndex, bindPayload, itemsFor, loadSidecar, resolvePayload, sidecarPath } from './payload-beads.mjs';
+import { beadIndex, bindPayload, withManifestSummary, withHeaderBead, itemsFor, loadSidecar, resolvePayload, sidecarPath } from './payload-beads.mjs';
 import { loadCorpus, mapPayload } from './resume-beads.mjs';
 import { STORES } from './payload-beads.mjs';
-import { TREE_CSS, buildTree, loadResumeBead, renderTree } from './bead-tree.mjs';
+import { TREE_CSS, TREE_JS, buildTree, syncTypeLabels, loadResumeBead, manifestSummaryBead, renderTree } from './bead-tree.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const HTMX_SRC = join(ROOT, 'lib', 'vendor', 'htmx-2.0.4.min.js');
@@ -74,11 +74,16 @@ function buildCvHtml(payloadPath) {
  * { id, html } so /poll can resend exactly those elements out of band.
  */
 export function renderLive(payloadPath, { server, token, resumeId = null }) {
-  const side = loadSidecar(payloadPath);
+  const rawSide = loadSidecar(payloadPath);
   const idx = beadIndex();
+  // The résumé bead is the authority: its manifest's careerSummary beats a frozen sidecar binding.
+  const resumeBead = resumeId ? loadResumeBead(resumeId) : null;
+  const side = resumeId ? withManifestSummary(rawSide, manifestSummaryBead(resumeBead), resumeId) : rawSide;
   // The page shows what the beads say NOW: bound bullets and the summary take
   // their bead's current description. The payload on disk is not touched.
-  const { payload, changed } = resolvePayload(JSON.parse(readFileSync(payloadPath, 'utf8')), side, idx);
+  const rawPayload = JSON.parse(readFileSync(payloadPath, 'utf8'));
+  const headerBead = side.bindings.candidate?.bead ? idx.get(side.bindings.candidate.bead)?.bead : null;
+  const { payload, changed } = resolvePayload(headerBead ? withHeaderBead(rawPayload, headerBead) : rawPayload, side, idx);
   const fromBead = new Set(changed);
   const resolvedPath = join(ROOT, '.lavish', '.live-payload.json');
   mkdirSync(dirname(resolvedPath), { recursive: true });
@@ -124,6 +129,19 @@ export function renderLive(payloadPath, { server, token, resumeId = null }) {
     const { beadId, source } = boundFor(ref);
     return wrap('li', '', inner, ref, beadId, source);
   });
+  // Header block: the name line carries the candidate (name, headline, contacts) bead.
+  html = html.replace(/<div class="header-title">([\s\S]*?)<\/div>/, (m, inner) => {
+    const { beadId, source } = boundFor('candidate');
+    return wrap('div', 'header-title', inner, 'candidate.title', beadId, source);
+  });
+  html = html.replace(/<div class="contact-row">([\s\S]*?)<\/div>/, (m, inner) => {
+    const { beadId, source } = boundFor('candidate');
+    return wrap('div', 'contact-row', inner, 'candidate.contacts', beadId, source);
+  });
+  html = html.replace(/<h1>([\s\S]*?)<\/h1>/, (m, inner) => {
+    const { beadId, source } = boundFor('candidate');
+    return wrap('h1', '', inner, 'candidate', beadId, source);
+  });
   html = html.replace(/<div class="summary-text">([\s\S]*?)<\/div>/g, (m, inner) => {
     const { beadId, source } = boundFor('summary');
     return wrap('div', 'summary-text', inner, 'summary', beadId, source);
@@ -150,7 +168,9 @@ export function renderLive(payloadPath, { server, token, resumeId = null }) {
   // Descending bead tree: résumé bead on top, manifest edges plus sidecar edges.
   let treeHtml = '';
   if (resumeId) {
-    treeHtml = renderTree(buildTree(resumeId, idx, side, loadResumeBead(resumeId)));
+    const tree = buildTree(resumeId, idx, rawSide, resumeBead);
+    try { syncTypeLabels(tree, idx); } catch { /* labels are advisory; the on-page warning stays */ }
+    treeHtml = renderTree(tree);
     elements.push({ id: 'lv-tree', html: treeHtml });
   }
 
@@ -165,7 +185,7 @@ export function renderLive(payloadPath, { server, token, resumeId = null }) {
 <p>Live: this page shows each bead's current text. Edit or confirm a bead and the line repaints within a few seconds. The payload file is not changed.</p>
 <p style="color:#666">Updated ${new Date().toLocaleTimeString()}</p></div>`;
 
-  const version = createHash('sha1').update(elements.map((e) => e.html).join('\n') + panel(false).replace(/Updated[^<]*/, '')).digest('hex').slice(0, 12);
+  const version = createHash('sha1').update(elements.map((e) => e.html).join('\n')).digest('hex').slice(0, 12);
   const poller = (oob) => `<div id="lv-poll" hx-get="${server}/poll?v=${version}" hx-trigger="every 4s" hx-swap="none"${oob ? ' hx-swap-oob="outerHTML"' : ''} style="display:none"></div>`;
 
   const head = `<meta name="htmx-config" content='{"selfRequestsOnly":false,"allowEval":false}'>
@@ -173,9 +193,9 @@ export function renderLive(payloadPath, { server, token, resumeId = null }) {
   html = html
     .replace('</head>', `${head}</head>`)
     .replace(/<body([^>]*)>/, `<body$1 hx-headers='${esc(JSON.stringify({ 'X-Lavish-Token': token }))}'>`)
-    .replace('</body>', `${treeHtml}${panel(false)}${poller(false)}</body>`);
+    .replace('</body>', `${treeHtml}${poller(false)}${resumeId ? TREE_JS : ''}</body>`);
 
-  const oob = () => `${elements.map((e) => e.html.replace(/^<(\w+)/, '<$1 hx-swap-oob="outerHTML"')).join('\n')}\n${panel(true)}\n${poller(true)}`;
+  const oob = () => `${elements.map((e) => e.html.replace(/^<(\w+)/, '<$1 hx-swap-oob="outerHTML"')).join('\n')}\n${poller(true)}`;
   return { html, version, oob, tally, drift };
 }
 
