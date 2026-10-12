@@ -176,7 +176,7 @@ export function readStore(store, { timeout = 60000 } = {}) {
   const exe = join(STORE_BIN, store);
   if (!existsSync(exe)) return { store, ok: false, reason: `no wrapper at ${exe}`, beads: [] };
   try {
-    const out = execFileSync(exe, ['list', '--json'], { encoding: 'utf8', timeout });
+    const out = execFileSync(exe, ['list', '--json'], { encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024 });
     const parsed = JSON.parse(out || '[]');
     if (!Array.isArray(parsed)) return { store, ok: false, reason: 'list --json was not an array', beads: [] };
     return { store, ok: true, beads: parsed };
