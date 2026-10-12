@@ -32,6 +32,7 @@
  *   node payload-beads.mjs pull   <payload.json> <ref>    copy bead text into payload
  */
 
+import * as yaml from 'js-yaml';
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { classifyBead, loadCorpus, mapPayload, readStore } from './resume-beads.mjs';
@@ -94,6 +95,35 @@ function isPlainProse(desc) {
   return !/^[A-Za-z_][\w-]*:\s*(-|$)/.test(d) && !/^(category|careerSummary|position):/.test(d);
 }
 
+/**
+ * The summary text a career bead holds: plain prose as-is, or the "Experience"
+ * item of a `careerSummary:` frame (the shape resume-data.py reads). null when
+ * it is neither (e.g. a frame with no Experience item).
+ */
+export function summaryTextOf(desc) {
+  const d = String(desc ?? '').trim();
+  if (!d) return null;
+  if (!/^careerSummary:/.test(d)) return isPlainProse(d) ? d : null;
+  try {
+    const items = yaml.load(d)?.careerSummary;
+    const hit = Array.isArray(items) ? items.find((i) => /^experience$/i.test(String(i?.title ?? '').trim())) : null;
+    const t = hit?.text ? String(hit.text).replace(/\s+/g, ' ').trim() : '';
+    return t || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The sidecar as it applies when a résumé bead is the authority: the bead its
+ * manifest names for careerSummary wins over a frozen `summary` binding, so
+ * repointing the manifest repoints the page. Pure; the sidecar file is untouched.
+ */
+export function withManifestSummary(side, summaryBeadId, resumeId) {
+  if (!summaryBeadId || side.bindings.summary?.bead === summaryBeadId) return side;
+  return { ...side, bindings: { ...side.bindings, summary: { bead: summaryBeadId, source: `manifest:${resumeId}` } } };
+}
+
 /** Create the sidecar, or add bindings for refs it lacks. Never overwrites one. */
 export function bindPayload(payloadPath, { write = true } = {}) {
   const payload = JSON.parse(readFileSync(payloadPath, 'utf8'));
@@ -122,7 +152,7 @@ export function itemsFor(payload, side, idx) {
     const b = side.bindings[ref];
     const hit = b ? idx.get(b.bead) : null;
     const text = textAt(payload, ref);
-    const beadText = hit ? hit.bead.description ?? '' : null;
+    const beadText = hit ? (ref === 'summary' && hit.store === 'career' ? summaryTextOf(hit.bead.description) ?? hit.bead.description ?? '' : hit.bead.description ?? '') : null;
     // Only a résumé bullet bead holds paste-ready bullet text; a frame, project
     // or career bead describes something else even when its text is one line.
     const holdsText = hit && (hit.store === 'resume_bullets' || (ref === 'summary' && hit.store === 'career'));
@@ -213,4 +243,24 @@ if (isMainModule(import.meta.url)) {
     console.error(`✗ ${e.message}`);
     process.exitCode = 1;
   }
+}
+
+/**
+ * The header bead (YAML `header:` block) is the authority for the payload's candidate
+ * block: name, headline and contacts. Returns a copy; the payload on disk is untouched.
+ */
+export function withHeaderBead(payload, bead) {
+  let h;
+  try { h = yaml.load(bead?.description ?? '')?.header; } catch { return payload; }
+  if (!h || typeof h !== 'object') return payload;
+  const c = { ...(payload.candidate ?? {}) };
+  if (h.name) c.name = h.name;
+  const title = Array.isArray(h.title) ? h.title.join(' · ') : h.title;
+  if (title) c.title = title;
+  for (const k of h.contacts ?? []) {
+    if (k.kind === 'email') c.email = k.label;
+    else if (k.kind === 'location') c.location = k.label;
+    else if (['linkedin', 'github', 'portfolio'].includes(k.kind)) c[k.kind] = { url: k.url, display: k.label };
+  }
+  return { ...payload, candidate: c };
 }
