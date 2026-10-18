@@ -37,6 +37,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { describeSpawn } from './helpers/describe-spawn.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const NOTHING_TO_VERIFY = /nothing to verify/i;
@@ -73,7 +74,7 @@ function runVerify(...args) {
 
 test('--help prints usage and exits 0, without reaching the portals check', () => {
   const r = runVerify('--help');
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.all}`);
+  assert.equal(r.status, 0, describeSpawn(r, `expected exit 0, got ${r.status}`));
   assert.match(r.stdout, /Usage:/);
   assert.match(r.stdout, /node verify-portals\.mjs/);
   assert.doesNotMatch(r.all, NOTHING_TO_VERIFY, '--help must exit before any sweep logic runs');
@@ -81,7 +82,7 @@ test('--help prints usage and exits 0, without reaching the portals check', () =
 
 test('-h prints usage and exits 0, without reaching the portals check', () => {
   const r = runVerify('-h');
-  assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.all}`);
+  assert.equal(r.status, 0, describeSpawn(r, `expected exit 0, got ${r.status}`));
   assert.match(r.stdout, /Usage:/);
   assert.doesNotMatch(r.all, NOTHING_TO_VERIFY);
 });
@@ -133,10 +134,9 @@ test('--file=<path> (the = form) is honored the same as the space-separated form
 
 // --file's operand is a value-taking flag with no dedicated value validation
 // of its own, so a missing/swallowed operand must be caught by
-// validateFlags()'s shared requireOperand mechanism (or, for the --file=
-// empty-string case that requireOperand's bare-token check can't see, an
-// explicit fallback check) rather than reaching resolve('') — the current
-// directory — and crashing readFileSync() with a raw EISDIR (CodeRabbit,
+// validateFlags()'s shared requireOperand mechanism (which also catches the
+// --file= empty-string case, #5127) rather than reaching resolve('') — the
+// current directory — and crashing readFileSync() with a raw EISDIR (CodeRabbit,
 // #4254 review).
 test('a bare --file with nothing after it is rejected, not read as the current directory', () => {
   const r = runVerify('--file');

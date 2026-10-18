@@ -97,6 +97,8 @@ export function consumeReexecMarker() {
   }
 }
 
+const BACKUP_BRANCH_RE = /^backup-pre-update-\d+\.\d+\.\d+-\d{8}T\d{6}Z$/;
+
 function isLegacyReexec() {
   if (process.env.CAREER_OPS_UPDATE_REEXEC !== '1') {
     return false;
@@ -108,7 +110,7 @@ function isLegacyReexec() {
     return false;
   }
   const backupBranch = process.env.CAREER_OPS_UPDATE_BACKUP_BRANCH || '';
-  if (!/^backup-pre-update-\d+\.\d+\.\d+-\d{8}T\d{6}Z$/.test(backupBranch)) {
+  if (!BACKUP_BRANCH_RE.test(backupBranch)) {
     return false;
   }
   try {
@@ -148,6 +150,27 @@ export const DASHBOARD_REBUILD_TIMEOUT_MS = parsePositiveInt(process.env.CAREER_
 export const UPDATE_PATH_CHECKOUT_BUDGET_MS = parsePositiveInt(process.env.CAREER_OPS_UPDATE_PATH_CHECKOUT_BUDGET_MS, 5000);
 export const REEXEC_BUFFER_TIMEOUT_MS = parsePositiveInt(process.env.CAREER_OPS_REEXEC_BUFFER_TIMEOUT_MS, 60000);
 
+// The only byte-exact files the system deliberately owns inside user-layer
+// directories. Keep this escape hatch small and reviewable: aliases, parents,
+// children, and case/Unicode variants are not overlaps.
+//
+// Rollback reads this list; apply() does not. apply() leaves the user-layer
+// decision to rejectUserLayerPaths, entry by entry.
+export const MANIFEST_USER_PATH_OVERLAPS = Object.freeze([
+  'writing-samples/README.md',
+  'interview-prep/sessions/.gitkeep',
+  'interview-prep/sessions/README.md',
+  'documents/.gitkeep',
+  'documents/README.md',
+  // Empty placeholders in otherwise user-owned directories (#4708).
+  'data/.gitkeep',
+  'data/offers/.gitkeep',
+  'data/parser-output/.gitkeep',
+  'jds/.gitkeep',
+  'output/.gitkeep',
+  'reports/.gitkeep',
+]);
+
 // System layer paths — ONLY these files get updated
 const SYSTEM_PATHS = [
   // .gitattributes governs how every other path below is written to disk, and
@@ -165,6 +188,7 @@ const SYSTEM_PATHS = [
   'modes/_brief.template.md',
   'voice-dna.template.md',
   'modes/oferta.md',
+  'modes/oferta-signals/',
   'modes/master-profile.md',
   'modes/pdf.md',
   'modes/ats.md',
@@ -245,6 +269,7 @@ const SYSTEM_PATHS = [
   'modes/tr/',
   'modes/ua/',
   'modes/ua/interview/',
+  'modes/vi/',
   'modes/heuristics/',
   'modes/regional/',
   'modes/zh/',
@@ -265,6 +290,7 @@ const SYSTEM_PATHS = [
   'HIRED.md',
   'theme-style.mjs',
   'generate-latex.mjs',
+  'install-latex-engine.mjs',
   'extract-latex-content.mjs',
   'patch-latex-content.mjs',
   'lib/ascii-fold.mjs',
@@ -274,6 +300,7 @@ const SYSTEM_PATHS = [
   'lib/node-floor.mjs',
   'lib/local-today.mjs',
   'lib/parse-date.mjs',
+  'lib/personalization.mjs',
   'lib/reply-proposals.mjs',
   'lib/placeholder-cell.mjs',
   'lib/tracker-addition.mjs',
@@ -283,7 +310,10 @@ const SYSTEM_PATHS = [
   'lib/tsv-formula-escape.mjs',
   'lib/is-main-module.mjs',
   'lib/mjs-files.mjs',
+  'lib/syntax-check.mjs',
+  'lib/syntax-check-child.mjs',
   'lib/walk-tree.mjs',
+  'lib/dir-lock.mjs',
   'lib/scratch-dirs.mjs',
   'lib/story-bank.mjs',
   'lib/outcome-dir.mjs',
@@ -297,12 +327,15 @@ const SYSTEM_PATHS = [
   'scripts/check-syntax.mjs',
   'scripts/export-ats-text.mjs',
   'scripts/followup-sweep.sh',
+  'scripts/ui-server.mjs',
   'story-provenance-check.mjs',
   'lib/latex-content.mjs',
   'lib/context-budget.mjs',
   // Ships alongside doctor.mjs, which imports it: an upgraded install whose
   // updater had no entry for it would check out a doctor that cannot load.
   'lib/title-filter-conflicts.mjs',
+  // Ships alongside liveness-api.mjs, which imports it.
+  'lib/linkedin-url.mjs',
   // Retired 2026-09-05: the suite moved to tests/context-budget.test.mjs. The
   // entry stays so staleSystemFiles() prunes the orphan on an upgraded install;
   // drop it once a release has shipped past that move.
@@ -314,6 +347,7 @@ const SYSTEM_PATHS = [
   'application-answers.mjs',
   'generate-cover-letter.mjs',
   'merge-tracker.mjs',
+  'persist-evaluation-report.mjs',
   'url-key.mjs',
   'sync-pdf-flags.mjs',
   'tracker-links.mjs',
@@ -324,6 +358,7 @@ const SYSTEM_PATHS = [
   'reconcile-pipeline.mjs',
   'dedup-tracker.mjs',
   'add-entry.mjs',
+  'github-evidence.mjs',
   'role-matcher.mjs',
   'tracker-utils.mjs',
   'tracker-parse.mjs',
@@ -360,6 +395,7 @@ const SYSTEM_PATHS = [
   'cv-title-check.mjs',
   'prepare-application.mjs',
   'application-artifacts.mjs',
+  'evaluation-cache.mjs',
   'batch-evaluate-gemini.mjs',
   'providers/',
   'data-static/',
@@ -411,6 +447,7 @@ const SYSTEM_PATHS = [
   'calibrate.mjs',
   'upskill.mjs',
   'skill-extract.mjs',
+  'skip-blockers.mjs',
   'intake.mjs',
   'stats.mjs',
   'funnel-stages.mjs',
@@ -546,6 +583,7 @@ const SYSTEM_PATHS = [
   'README.zh-TW.md',
   'README.tr.md',
   'README.vi.md',
+  'README.id.md',
   'CHANGELOG.md',
   'CODE_OF_CONDUCT.md',
   'CONTRIBUTORS.md',
@@ -708,14 +746,13 @@ export function localUserPaths(root = ROOT) {
     }
     // Canonical spelling, required BEFORE the collision check below.
     //
-    // That check compares strings exactly (`path === sys`), and
+    // That check compares canonical path segments, while
     // userLayerViolations() later compares against git's changed-path format,
-    // which is always canonical. A non-canonical spelling therefore matches
-    // NEITHER: `./merge-tracker.mjs` sails past the collision check, and is
-    // never recognised as the file it names when the safety check runs. The
-    // declaration silently protects nothing while the updater overwrites the
-    // file — the data loss this feature exists to prevent, reachable from a
-    // plausible typo.
+    // which is always canonical. A non-canonical spelling could otherwise
+    // evade one or both checks: `./merge-tracker.mjs` is never recognised as
+    // the file it names when the safety check runs. The declaration silently
+    // protects nothing while the updater overwrites the file — the data loss
+    // this feature exists to prevent, reachable from a plausible typo.
     //
     // Rejected rather than normalised, deliberately. Normalising would accept
     // several spellings for one path and leave this file disagreeing with what
@@ -732,18 +769,45 @@ export function localUserPaths(root = ROOT) {
     if (segments.includes('.')) {
       reject(path, 'paths must be written plainly, with no "." segment (use "merge-tracker.mjs", not "./merge-tracker.mjs")');
     }
-    const collision = SYSTEM_PATHS.find((sys) =>
-      sys.endsWith('/') ? path.startsWith(sys) : path === sys,
+    const pathSegments = manifestPathSegments(path);
+    // A declaration from an older install may repeat a built-in USER_PATHS
+    // directory (for example `documents/`). It became a SYSTEM_PATHS collision
+    // only when that directory gained a tracked scaffold. The built-in path
+    // already protects the declaration's complete scope, so ignore the
+    // redundant line rather than making apply()/rollback fail on upgrade.
+    const alreadyProtected = USER_PATHS.some((userPath) =>
+      userPathCoversDeclaration(userPath, path),
     );
+    if (alreadyProtected) continue;
+
+    const collision = SYSTEM_PATHS.find((sys) => {
+      const systemSegments = manifestPathSegments(sys);
+      const shared = Math.min(pathSegments.length, systemSegments.length);
+      return pathSegments.slice(0, shared).every((segment, index) => segment === systemSegments[index]);
+    });
     if (collision) {
       reject(
         path,
         `the system layer ships it (SYSTEM_PATHS entry "${collision}"). `
-        + 'Declaring it would stop updates to it with no other signal',
+        + 'Remove this line if USER_PATHS already protects it, or narrow it to a fork-owned path upstream does not ship.',
       );
     }
   }
-  return declared;
+  return declared.filter((path) => !USER_PATHS.some((userPath) =>
+    userPathCoversDeclaration(userPath, path),
+  ));
+}
+
+/** Whether a built-in user path fully covers a local declaration's scope. */
+function userPathCoversDeclaration(userPath, declaration) {
+  const userSegments = manifestPathSegments(userPath);
+  const declaredSegments = manifestPathSegments(declaration);
+  if (userPath.endsWith('/')) {
+    return userSegments.length <= declaredSegments.length
+      && userSegments.every((segment, index) => segment === declaredSegments[index]);
+  }
+  return userSegments.length === declaredSegments.length
+    && userSegments.every((segment, index) => segment === declaredSegments[index]);
 }
 
 /**
@@ -755,6 +819,102 @@ export function localUserPaths(root = ROOT) {
  */
 export function effectiveUserPaths(root = ROOT) {
   return [...USER_PATHS, ...localUserPaths(root)];
+}
+
+function manifestPathSegments(path) {
+  const withoutTrailingSlash = path.endsWith('/') ? path.slice(0, -1) : path;
+  return withoutTrailingSlash.split('/').map((segment) =>
+    // Uppercasing after the first lowercase expansion approximates Unicode case
+    // folding where JavaScript has no caseFold(): ß → ss, final sigma → σ,
+    // and the long s → s. Extra aliases reject declarations/manifest paths
+    // conservatively, which is safe on case-sensitive filesystems too.
+    segment.normalize('NFC').toLowerCase().toUpperCase().toLowerCase(),
+  );
+}
+
+function unsafeManifestPathReason(path, userPaths) {
+  if (typeof path !== 'string' || path.length === 0) return 'it is not a non-empty string';
+  if (path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path) || path.startsWith('\\')) {
+    return 'absolute, drive-qualified, and UNC paths are forbidden';
+  }
+  if (path.startsWith('./')) return 'leading "./" aliases are forbidden';
+  if (path.includes('\\')) return 'backslashes are forbidden';
+  if (path.includes('//')) return 'repeated separators and multiple trailing slashes are forbidden';
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(path)) return 'control characters are forbidden';
+  if (/[:*?\[\]]/u.test(path)) return 'git pathspec magic is forbidden';
+
+  const segments = manifestPathSegments(path);
+  if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    return 'empty, ".", and ".." path segments are forbidden';
+  }
+  if (segments.some((segment) => segment === '.git')) return 'the git metadata directory is forbidden';
+
+  // The system-owned scaffolds are exceptions only in their exact byte
+  // spelling. Testing this before the protected-boundary comparison allows the
+  // documented files while ensuring no alias, parent, or child inherits it.
+  if (MANIFEST_USER_PATH_OVERLAPS.includes(path)) return null;
+
+  for (const userPath of userPaths) {
+    if (typeof userPath !== 'string' || userPath.length === 0) continue;
+    const protectedSegments = manifestPathSegments(userPath);
+    const common = Math.min(segments.length, protectedSegments.length);
+    let prefix = true;
+    for (let i = 0; i < common; i++) {
+      if (segments[i] !== protectedSegments[i]) {
+        prefix = false;
+        break;
+      }
+    }
+    if (prefix) {
+      return `it overlaps protected user path "${userPath}"`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether a manifest entry is canonical and cannot address user data.
+ * Comparisons against protected paths are segment-based, NFC-normalized, and
+ * case-folded so filesystem aliases fail closed on macOS and Windows.
+ */
+export function isSafeManifestPath(path, userPaths = USER_PATHS) {
+  return unsafeManifestPathReason(path, userPaths) === null;
+}
+
+function filterSafeManifestPaths(paths, userPaths, onRejected = () => {}) {
+  const safe = [];
+  const seen = new Set();
+  for (const path of Array.isArray(paths) ? paths : []) {
+    const reason = unsafeManifestPathReason(path, userPaths);
+    if (reason) {
+      onRejected(path, reason);
+      continue;
+    }
+    if (!seen.has(path)) {
+      seen.add(path);
+      safe.push(path);
+    }
+  }
+  return safe;
+}
+
+function assertSafeManifestPaths(paths, userPaths, label) {
+  if (!Array.isArray(paths) || paths.length === 0) {
+    throw new Error(`${label} is missing or empty; refusing to update`);
+  }
+  const rejected = [];
+  const safe = filterSafeManifestPaths(paths, userPaths, (path, reason) => rejected.push({ path, reason }));
+  if (rejected.length > 0) {
+    const detail = rejected.map(({ path, reason }) => `${JSON.stringify(path)} (${reason})`).join(', ');
+    throw new Error(`${label} contains unsafe manifest path(s): ${detail}`);
+  }
+  return safe;
+}
+
+// Canonical form only: no protected-path comparison. apply() uses this before
+// the self-bootstrap checkout, where a malformed spelling would reach git.
+function assertCanonicalManifestPaths(paths, label) {
+  return assertSafeManifestPaths(paths, [], label);
 }
 
 /**
@@ -1245,6 +1405,41 @@ function updateBackupBranchName(version, date = new Date()) {
   return `backup-pre-update-${version}-${stamp}`;
 }
 
+/** Map a strict updater backup branch to its durable attempted-target ref. */
+export function targetRefForBackup(backupBranch) {
+  if (!BACKUP_BRANCH_RE.test(backupBranch)) {
+    throw new Error(`Invalid updater backup branch: ${backupBranch}`);
+  }
+  return `refs/backup-pre-update-target/${backupBranch}`;
+}
+
+/**
+ * Remove target refs whose strict updater backup branch has been deleted.
+ * Paired refs remain for every existing backup so rollback can still identify
+ * target-only files; unrecognised/manual names in this namespace are retained.
+ * @param {{git?: Function}} [ctx] - Test seam; defaults to the ROOT-bound runner.
+ * @returns {string[]} Pruned ref names.
+ */
+export function pruneStaleTargetRefs(ctx = {}) {
+  const runGit = ctx.git || git;
+  const branches = new Set(
+    runGit('for-each-ref', '--format=%(refname)', 'refs/heads/backup-pre-update-*')
+      .split('\n').filter(Boolean),
+  );
+  const prefix = 'refs/backup-pre-update-target/';
+  const targetRefs = runGit('for-each-ref', '--format=%(refname)', prefix)
+    .split('\n').filter(Boolean);
+  const pruned = [];
+  for (const targetRef of targetRefs) {
+    const backupBranch = targetRef.slice(prefix.length);
+    if (!BACKUP_BRANCH_RE.test(backupBranch)) continue;
+    if (branches.has(`refs/heads/${backupBranch}`)) continue;
+    runGit('update-ref', '-d', targetRef);
+    pruned.push(targetRef);
+  }
+  return pruned;
+}
+
 function backupTimestamp(branchName) {
   const match = branchName.match(/-(\d{8}T\d{6}Z)$/);
   if (!match) return 0;
@@ -1254,7 +1449,7 @@ function backupTimestamp(branchName) {
   ) || 0;
 }
 
-function newestBackupBranch(branches) {
+function newestBackupBranch(branches, accept = () => true) {
   const branchList = branches.split('\n').map(b => b.trim()).filter(Boolean);
   if (branchList.length === 0) return null;
 
@@ -1265,7 +1460,25 @@ function newestBackupBranch(branches) {
     .filter(entry => entry.timestamp > 0)
     .sort((a, b) => b.timestamp - a.timestamp);
 
-  return timestamped[0]?.branch || branchList[0];
+  const ordered = timestamped.length > 0
+    ? timestamped.map(entry => entry.branch)
+    : branchList;
+
+  return ordered.find(accept) || null;
+}
+
+// A newer backup with no paired target (a retry that died before the fetch
+// pinned one) must not hide an older backup that still can name its release.
+function rollbackBackupBranch(branches) {
+  const paired = newestBackupBranch(branches, (branch) => {
+    try {
+      git('show-ref', '--verify', '--quiet', targetRefForBackup(branch));
+      return branch;
+    } catch {
+      // This backup has no paired target. Try the next older one.
+    }
+  });
+  return paired || newestBackupBranch(branches);
 }
 
 export function parsePositiveInt(value, fallback) {
@@ -1332,6 +1545,10 @@ export function gitIn(root, ...args) {
 
 function git(...args) {
   return gitIn(ROOT, ...args);
+}
+
+function gitRaw(...args) {
+  return gitRawIn(ROOT, ...args);
 }
 
 /**
@@ -2320,7 +2537,7 @@ export function driftPathspecExcludingSkillEntrypoints(systemPaths, skillEntrypo
  *        of staying pinned. Anything else is the user's.
  *
  * @param {string[]} paths - manifest entries (files or `dir/` prefixes).
- * @param {string} upstreamRef - ref being checked out, normally FETCH_HEAD.
+ * @param {string} upstreamRef - Ref being checked out; apply passes its pinned target commit.
  * @param {{git?: Function}} [ctx] - injectable git runner, for tests.
  * @returns {string[]} repo-relative file paths, sorted.
  */
@@ -2428,7 +2645,11 @@ export function locallyModifiedSystemFiles(paths, upstreamRef = 'FETCH_HEAD', ct
     }
     for (const [commit, files] of byCommit) {
       try {
-        const stat = runGit('diff', '--ignore-cr-at-eol', '--numstat', commit, '--', ...files);
+        // Batched: one update commit can deliver over a thousand files, and
+        // naming them all in one call overflows a Windows command line (#5103).
+        const stat = argvBatches(files)
+          .map((batch) => runGit('diff', '--ignore-cr-at-eol', '--numstat', commit, '--', ...batch))
+          .join('\n');
         const stillDiffers = new Set(
           stat.split('\n').map((l) => l.trim()).filter(Boolean)
             .map((l) => l.split('\t')[2]).filter(Boolean),
@@ -2469,15 +2690,20 @@ export function locallyModifiedSystemFiles(paths, upstreamRef = 'FETCH_HEAD', ct
       };
       let worktreeShas = null;
       let publishedShas = null;
+      // Both dumps are batched for the same reason as the numstat above
+      // (#5103); rawShas accumulates per path, so joined output parses whole.
+      const batches = argvBatches(undelivered);
       try {
-        worktreeShas = rawShas(runGit('diff', '--raw', '--no-abbrev', '--no-renames', upstreamRef, '--', ...undelivered));
+        worktreeShas = rawShas(batches.map((batch) => runGit(
+          'diff', '--raw', '--no-abbrev', '--no-renames', upstreamRef, '--', ...batch,
+        )).join('\n'));
       } catch {
         worktreeShas = null;
       }
       try {
-        publishedShas = rawShas(runGit(
-          'log', '--raw', '--no-abbrev', '--no-renames', '--format=%x1e%H', publishedRange, '--', ...undelivered,
-        ));
+        publishedShas = rawShas(batches.map((batch) => runGit(
+          'log', '--raw', '--no-abbrev', '--no-renames', '--format=%x1e%H', publishedRange, '--', ...batch,
+        )).join('\n'));
       } catch {
         publishedShas = null;
       }
@@ -2499,26 +2725,20 @@ export function locallyModifiedSystemFiles(paths, upstreamRef = 'FETCH_HEAD', ct
 
   const atRisk = [...changedLocally].filter((file) => differsFromUpstream.has(file));
 
-  // `git diff` never lists untracked files, so a file created locally at a path
-  // the upstream ref DOES ship escapes both sets above — and the checkout
-  // overwrites it with no warning and no .bak, which is the very loss mode this
-  // exists to prevent. Only untracked files upstream actually ships can be
-  // clobbered, so the upstream existence check is the whole filter.
-  let untracked = [];
+  // `git diff` never lists untracked files, and --exclude-standard also hides
+  // ignored ones even though checkout overwrites them too. Enumerate only
+  // upstream filenames, then subtract the index: this finds both kinds of
+  // collision without walking large ignored directories such as node_modules.
   try {
-    untracked = runGit('ls-files', '--others', '--exclude-standard', '--', ...paths)
-      .split('\n').map((f) => f.trim()).filter(Boolean);
+    const tracked = new Set(runGit('ls-files', '-z', '--', ...paths).split('\0').filter(Boolean));
+    const upstreamFiles = runGit('ls-tree', '-r', '--name-only', '-z', upstreamRef, '--', ...paths)
+      .split('\0').filter(Boolean);
+    for (const file of upstreamFiles) {
+      if (!tracked.has(file)) atRisk.push(file);
+    }
   } catch {
     // Same degradation contract as diffNames: a warning we cannot compute must
     // never abort the update.
-  }
-  for (const file of untracked) {
-    try {
-      runGit('cat-file', '-e', `${upstreamRef}:${file}`);
-      atRisk.push(file);
-    } catch {
-      // Purely local file, absent upstream — the checkout cannot touch it.
-    }
   }
 
   // A path that is not on disk cannot be overwritten, so it is not at risk.
@@ -2548,7 +2768,7 @@ export function locallyModifiedSystemFiles(paths, upstreamRef = 'FETCH_HEAD', ct
  * would leave nothing to check out — i.e. `path` itself is (for a single
  * file) or entirely consists of (for a `dir/`-suffixed directory) preserved
  * content. apply()'s checkout loop uses this to skip such an entry outright:
- * `git checkout FETCH_HEAD -- <path> :(exclude)<path>` errors with "did not
+ * `git checkout <target-ref> -- <path> :(exclude)<path>` errors with "did not
  * match any file(s)" when the exclusions cancel the whole pathspec, and that
  * error is indistinguishable from a genuine checkout failure at the call
  * site, so it would abort the entire update over a file the user asked to
@@ -2704,37 +2924,162 @@ export function backupSystemFiles(files, ctx = {}) {
   });
 }
 
+/**
+ * Return system paths an update had changed to their pre-update state.
+ *
+ * @param {string[]} paths - SYSTEM_PATHS entries (files or directories) to restore.
+ * @param {Set<string>} protectedPaths - Paths dirty before the update (initialStatusPaths).
+ * @param {{git?: Function, root?: string, exclude?: string[]}} [ctx] - `git` and
+ *   `root` are test seams. `exclude` lists the files the update kept out of its
+ *   checkout (preservedPaths): they still hold the user's version, so they stay
+ *   as they are.
+ */
 export function revertPaths(paths, protectedPaths = new Set(), ctx = {}) {
   const runGit = ctx.git || git;
   const root = ctx.root || ROOT;
+  const exclude = ctx.exclude || [];
   if (paths.length === 0) return;
+  const stranded = [];
+  const unchecked = [];
+  // A file the update kept out is never one of its additions either.
+  if (exclude.length > 0) protectedPaths = new Set([...protectedPaths, ...exclude]);
   // Must restore from HEAD, not from the index (#915 bug 1). After
-  // `git checkout FETCH_HEAD -- <path>` the index already holds the new
+  // `git checkout <target-ref> -- <path>` leaves the index holding the new
   // content, so `git checkout -- <path>` (index→worktree) is a no-op.
   // `git checkout HEAD -- <path>` resets both the index and the worktree
   // to the pre-update commit, which is the correct rollback target.
   for (const p of paths) {
-    try {
-      runGit('checkout', 'HEAD', '--', p);
-    } catch (err) {
-      const pathspec = p.endsWith('/') ? p.slice(0, -1) : p;
-      // Only remove if the path genuinely doesn't exist in HEAD.
-      // Other errors (permissions, corrupt refs) should re-throw.
-      let existsInHead = true;
-      try { runGit('cat-file', '-e', `HEAD:${pathspec}`); } catch { existsInHead = false; }
-      if (existsInHead) throw err;
-      // Path was newly introduced by the update — remove it so the
-      // working tree is consistent with HEAD.
-      try { runGit('rm', '-r', '-f', '--ignore-unmatch', '--', pathspec); } catch { /* ignore */ }
-      try { rmSync(join(root, pathspec), { recursive: true, force: true }); } catch { /* already gone */ }
+    const pathspec = p.endsWith('/') ? p.slice(0, -1) : p;
+    // The update checked a directory out with `:(exclude)` for each preserved
+    // file under it (#2337), so a preserved file with an uncommitted edit kept
+    // that edit. A bare `git checkout HEAD -- <dir>` would reset it to HEAD:
+    // restore with the same exclusions. When they leave nothing of the
+    // directory in HEAD, git fails with "did not match any file(s)", so skip
+    // the checkout; the additions below are still removed.
+    const kept = exclude.filter((file) => file === pathspec || file.startsWith(`${pathspec}/`));
+    if (kept.includes(pathspec)) continue;
+    if (kept.length === 0 || headHasFilesBesides(pathspec, kept, runGit)) {
+      try {
+        runGit('checkout', 'HEAD', '--', p, ...kept.map((file) => `${EXCLUDE_PATHSPEC_PREFIX}${file}`));
+      } catch (err) {
+        // Only remove if the path genuinely doesn't exist in HEAD.
+        // Other errors (permissions, corrupt refs) should re-throw.
+        let existsInHead = true;
+        try { runGit('cat-file', '-e', `HEAD:${pathspec}`); } catch { existsInHead = false; }
+        if (existsInHead) throw err;
+        // A file newly introduced by the update is removed so the working tree
+        // matches HEAD. A directory is not removed wholesale: it may already have
+        // held the user's own untracked files before the update created it
+        // upstream, and deleting it took those along. removeAdditionsNotInHead()
+        // below deletes only what the update added to it.
+        if (!isDirectoryPath(p, join(root, pathspec))) {
+          try { runGit('rm', '-f', '--ignore-unmatch', '--', pathspec); } catch { /* ignore */ }
+          try { rmSync(join(root, pathspec), { force: true }); } catch { /* already gone */ }
+        }
+      }
     }
     // A directory pathspec that exists in HEAD checks out cleanly above, so the
     // catch never runs — but `git checkout HEAD -- docs/` only restores files
     // HEAD already knows about. Files the update introduced *under* that
     // directory are not in HEAD, so they survive the rollback as staged
     // additions and the tree is left dirtier than before the update (#2015).
-    removeAdditionsNotInHead(p, protectedPaths, ctx);
+    try {
+      stranded.push(...removeAdditionsNotInHead(p, protectedPaths, ctx));
+    } catch {
+      unchecked.push(p);
+    }
   }
+  // An addition that could not be unstaged, or a path whose additions could not
+  // even be listed, leaves the tree possibly short of HEAD. The other paths are
+  // restored first; then the caller hears it failed, so it does not report a
+  // full restore and points at `rollback` instead.
+  const problems = [];
+  if (stranded.length > 0) problems.push(`could not remove ${stranded.length} file(s) the update added: ${stranded.join(', ')}`);
+  if (unchecked.length > 0) problems.push(`could not list what the update added under ${unchecked.join(', ')}`);
+  if (problems.length > 0) throw new Error(problems.join('; '));
+}
+
+/**
+ * Does HEAD hold any file under a pathspec other than the excluded ones?
+ * An unreadable tree answers yes, so the checkout runs and reports the real error.
+ */
+function headHasFilesBesides(pathspec, excluded, runGit) {
+  let files;
+  try {
+    files = runGit('ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', pathspec).split('\0').filter(Boolean);
+  } catch {
+    return true;
+  }
+  const skip = new Set(excluded);
+  return files.some((file) => !skip.has(file));
+}
+
+/** A SYSTEM_PATHS entry that names a directory: by its trailing slash, or on disk. */
+function isDirectoryPath(entry, absolute) {
+  if (entry.endsWith('/')) return true;
+  try {
+    return lstatSync(absolute).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Put back the system paths an update had checked out before it failed.
+ *
+ * An update checks files out one path at a time and commits them at the end, so
+ * a failure in between (a file another program holds open, a path too long for
+ * Windows) leaves the earlier paths at the new version, uncommitted, while
+ * VERSION still names the old one. Both callers rethrow afterwards; this only
+ * stops them leaving the install half-updated, and says so either way.
+ *
+ * @param {string[]} paths - Paths the failed update had checked out.
+ * @param {Set<string>} protectedPaths - Paths dirty before the update, as for revertPaths().
+ * @param {{what: string, git?: Function, root?: string, exclude?: string[]}} options -
+ *   `what` names the paths in the message; `exclude` (the preserved files) and the
+ *   `git` and `root` test seams go to revertPaths().
+ * @returns {boolean} false when the restore itself failed.
+ */
+export function restoreAfterFailedUpdate(paths, protectedPaths, { what, ...ctx }) {
+  if (paths.length === 0) return true;
+  try {
+    revertPaths(paths, protectedPaths, ctx);
+    console.error(`Restored ${paths.length} ${what} from HEAD.`);
+    return true;
+  } catch (err) {
+    console.error(`Could not restore the ${what} (${err.message}).`);
+    console.error('Run `node update-system.mjs rollback` to return to the version before this update.');
+    return false;
+  }
+}
+
+/**
+ * Put an install's own edits to updater files back after a failed self-reexec.
+ *
+ * The self-bootstrap overwrites updater files this install had changed, after
+ * saving each one as a .bak (backupSystemFiles). When the update then fails,
+ * restoreAfterFailedUpdate() returns them to HEAD, which is not what the user
+ * had: their edit would survive only in the .bak. Copy each saved backup back
+ * over its file. The .bak stays, as the update promised it would.
+ *
+ * @param {{file: string, backup: string}[]} backups - Successful backupSystemFiles() results.
+ * @param {{root?: string, copyFile?: Function}} [ctx] - Test seams.
+ * @returns {string[]} Files whose local version could not be put back.
+ */
+export function restoreBootstrapBackups(backups, ctx = {}) {
+  const root = ctx.root || ROOT;
+  const copyFile = ctx.copyFile || copyFileSync;
+  const failed = [];
+  for (const { file, backup } of backups) {
+    try {
+      copyFile(join(root, ...backup.split('/')), join(root, ...file.split('/')));
+      console.error(`Put back your local version of ${file} (the copy in ${backup} stays).`);
+    } catch (err) {
+      failed.push(file);
+      console.error(`Could not put back your local version of ${file} (${err.message}); it is in ${backup}.`);
+    }
+  }
+  return failed;
 }
 
 /**
@@ -2752,6 +3097,8 @@ export function revertPaths(paths, protectedPaths = new Set(), ctx = {}) {
  *   runner (defaults to the module `git`, bound to ROOT) and the working-tree
  *   root used for filesystem deletes. Production always uses the defaults; only
  *   the behavioral rollback test overrides them to drive a throwaway repo.
+ * @returns {string[]} Additions that could not be unstaged, left in place.
+ * @throws When the additions cannot be listed: that is not proof there are none.
  */
 export function removeAdditionsNotInHead(pathspec, protectedPaths = new Set(), ctx = {}) {
   const runGit = ctx.git || git;
@@ -2762,10 +3109,12 @@ export function removeAdditionsNotInHead(pathspec, protectedPaths = new Set(), c
     // -z: NUL-delimited, unquoted output, so paths containing spaces or even
     // newlines survive intact — `split('\n').trim()` would mangle them.
     added = runGit('diff', '--cached', '-z', '--name-only', '--diff-filter=A', 'HEAD', '--', spec);
-  } catch {
-    // No HEAD yet, or an unreadable pathspec — nothing safe to clean up.
-    return;
+  } catch (err) {
+    // Nothing is deleted without the list, but an unreadable index or HEAD is
+    // not "the update added nothing": the caller has to know it was not checked.
+    throw new Error(`could not list the additions under ${spec} (${err.message})`, { cause: err });
   }
+  const stranded = [];
   for (const file of added.split('\0').filter(Boolean)) {
     // Never touch something the user already had staged before the update —
     // only additions THIS update introduced (#2015 review: no data loss).
@@ -2779,11 +3128,13 @@ export function removeAdditionsNotInHead(pathspec, protectedPaths = new Set(), c
       // the worktree file in place and keep rolling back the rest — deleting
       // the worktree copy now would strand a staged addition with no file.
       console.error(`Rollback: could not unstage ${file}; leaving it untouched.`);
+      stranded.push(file);
     }
     if (removed) {
       try { rmSync(join(root, file), { force: true }); } catch { /* already gone */ }
     }
   }
+  return stranded;
 }
 
 /**
@@ -2825,7 +3176,7 @@ export function isTracked(path, ctx = {}) {
  * downstream — a `-f` on an explicit filename cannot sweep a sibling. It also
  * cannot reach a user file at all, because every name comes out of the TARGET
  * TREE: by construction each one is a file upstream ships. That is the property
- * that matters, and it is why the expansion asks FETCH_HEAD rather than the
+ * that matters, and it is why the expansion asks the target ref rather than the
  * user's index — `ls-files`/`status` read the user's checkout to decide what to
  * force into a commit, which is the same class of mistake in the other
  * direction. A status-based guard cannot even see the problem: `git status`
@@ -2842,7 +3193,7 @@ export function isTracked(path, ctx = {}) {
  * @returns {string[]} De-duplicated file paths, never a directory.
  */
 export function expandToShippedFiles(paths, ref = 'FETCH_HEAD', ctx = {}) {
-  const runGit = ctx.git || git;
+  const runGit = ctx.git || gitRaw;
   const seen = new Set();
   const files = [];
   const take = (p) => { if (p && !seen.has(p)) { seen.add(p); files.push(p); } };
@@ -2866,7 +3217,35 @@ export function expandToShippedFiles(paths, ref = 'FETCH_HEAD', ctx = {}) {
 }
 
 /**
- * Cap on the argv bytes handed to one `git add`.
+ * Expand safe manifest coverage to concrete files that actually exist in a
+ * tree. Unlike expandToShippedFiles(), absent direct entries are dropped: this
+ * helper drives rollback deletion, where passing through a manifest spelling
+ * that was never in the paired target would manufacture authority to remove it.
+ */
+export function manifestTreeFiles(paths, ref, userPaths = USER_PATHS, ctx = {}) {
+  const runGit = ctx.git || gitRaw;
+  const onRejected = ctx.onRejected || (() => {});
+  const safePaths = filterSafeManifestPaths(paths, userPaths, onRejected);
+  const seen = new Set();
+  const files = [];
+  for (const path of safePaths) {
+    const listed = runGit('--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', ref, '--', path);
+    for (const file of listed.split('\0').filter(Boolean)) {
+      const reason = unsafeManifestPathReason(file, userPaths);
+      if (reason) {
+        onRejected(file, reason);
+        continue;
+      }
+      if (seen.has(file)) continue;
+      seen.add(file);
+      files.push(file);
+    }
+  }
+  return files;
+}
+
+/**
+ * Cap on the argv bytes of file paths handed to one git call.
  *
  * Expanding directories multiplies the pathspec count (283 manifest entries →
  * 817 files, ~22 KB of argv today), and Windows caps a whole command line at
@@ -2875,7 +3254,32 @@ export function expandToShippedFiles(paths, ref = 'FETCH_HEAD', ctx = {}) {
  * release — failing, eventually, inside the one tool a user cannot easily
  * repair by hand. Batching is a consequence of the expansion, not a flourish.
  */
-const ADD_ARGV_BUDGET = 8000;
+const ARGV_BUDGET = 8000;
+
+/**
+ * Split file paths into runs whose joined length stays within ARGV_BUDGET, for
+ * any git call that names files one by one. A single path wider than the
+ * budget still goes out on its own.
+ *
+ * @param {string[]} paths
+ * @returns {string[][]}
+ */
+function argvBatches(paths) {
+  const batches = [];
+  let batch = [];
+  let budget = 0;
+  for (const path of paths) {
+    if (batch.length > 0 && budget + path.length + 1 > ARGV_BUDGET) {
+      batches.push(batch);
+      batch = [];
+      budget = 0;
+    }
+    batch.push(path);
+    budget += path.length + 1;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
 
 /**
  * Stage the update's own system-layer files.
@@ -2913,24 +3317,67 @@ export function addPaths(paths, ctx = {}) {
   // committed to.
   rejectDirectories(paths, ctx.root || ROOT);
   const runGit = ctx.git || git;
-  let batch = [];
-  let budget = 0;
   // --literal-pathspecs: these are filenames, and a name like `docs/[x].env`
   // read as a glob would force-add an ignored sibling `docs/x.env`. `--` ends
   // option parsing but does not stop pathspec interpretation.
-  const flush = () => {
-    if (batch.length === 0) return;
+  for (const batch of argvBatches(paths)) {
     runGit('--literal-pathspecs', 'add', '-f', '--', ...batch);
-    batch = [];
-    budget = 0;
-  };
-  for (const path of paths) {
-    // A single path wider than the budget still goes out on its own.
-    if (batch.length > 0 && budget + path.length + 1 > ADD_ARGV_BUDGET) flush();
-    batch.push(path);
-    budget += path.length + 1;
   }
-  flush();
+}
+
+/** Where a scoped update commit reads its pathspecs from, under the git dir. */
+const COMMIT_PATHSPEC_FILE = 'career-ops-update-pathspecs';
+
+/**
+ * Write `paths` NUL-delimited to a file in the git dir, for
+ * `git commit --pathspec-from-file=<file> --pathspec-file-nul`.
+ *
+ * A scoped commit cannot be split into batches — one commit per batch is a
+ * different history — so the list leaves argv instead. The file is the same
+ * one the failure message points at, so the recovery command it prints stays
+ * runnable on Windows too, where the argv form of it is not (#5103).
+ *
+ * Each call gets its own file. A failed commit leaves its file for the
+ * recovery command, and a later scoped commit must not overwrite or delete it.
+ *
+ * @param {string[]} paths
+ * @param {{ git?: Function, root?: string }} [ctx]
+ * @returns {string} The file's path as git printed it, relative to root.
+ */
+export function writePathspecFile(paths, ctx = {}) {
+  const runGit = ctx.git || git;
+  const name = `${COMMIT_PATHSPEC_FILE}-${randomBytes(6).toString('hex')}`;
+  const file = runGit('rev-parse', '--git-path', name).trim();
+  writeFileSync(resolve(ctx.root || ROOT, file), paths.map((p) => `${p}\0`).join(''));
+  return file;
+}
+
+/**
+ * `git commit -m <message> -- <paths>`, without putting <paths> on argv.
+ *
+ * Same commit, same `--only` semantics as the pathspec arguments it replaces:
+ * git reads `--pathspec-from-file` as if each entry had been passed after
+ * `--`. The file is removed on success and left in place on failure, where the
+ * caller's recovery hint names it: the thrown error carries it as `pathspecFile`.
+ *
+ * @param {string} message
+ * @param {string[]} paths - Must be non-empty; an empty list would commit the whole index.
+ * @param {{ git?: Function, root?: string, literal?: boolean }} [ctx]
+ */
+export function commitPathspecs(message, paths, ctx = {}) {
+  if (paths.length === 0) throw new Error('commitPathspecs needs at least one path');
+  const runGit = ctx.git || git;
+  const file = writePathspecFile(paths, ctx);
+  try {
+    runGit(
+      ...(ctx.literal ? ['--literal-pathspecs'] : []),
+      'commit', '-m', message, `--pathspec-from-file=${file}`, '--pathspec-file-nul',
+    );
+  } catch (err) {
+    err.pathspecFile = file;
+    throw err;
+  }
+  rmSync(resolve(ctx.root || ROOT, file), { force: true });
 }
 
 /**
@@ -3712,7 +4159,7 @@ async function writeGitignoreAtomic(filePath, content) {
  * only ordering that does not require rewriting lines we do not own.
  *
  * @param {string} localText - Current .gitignore content.
- * @param {string} upstreamText - Upstream .gitignore content (FETCH_HEAD).
+ * @param {string} upstreamText - Upstream .gitignore content from the target tree.
  * @returns {{ text: string, added: string[] }} Reconciled content and the
  *   patterns appended. `added` is empty and `text` is byte-identical to
  *   `localText` when nothing was missing, which is what makes repeated runs
@@ -3830,8 +4277,7 @@ async function apply() {
   // they must not authorize the initial invocation (#2866).
   const authenticatedReexec = consumeReexecMarker();
   const legacyReexec = isLegacyReexec();
-  const isReexec = authenticatedReexec || legacyReexec ||
-    (process.argv.includes('--confirm') && process.env.CAREER_OPS_UPDATE_REEXEC === '1');
+  const isReexec = authenticatedReexec || legacyReexec;
   const updateForce = process.argv.includes('--force') ||
     (isReexec && process.env.CAREER_OPS_UPDATE_FORCE === '1');
   const updateConfirmed = process.argv.includes('--confirm') ||
@@ -3894,7 +4340,11 @@ async function apply() {
     // invisible to `git branch` and can be lost if the update aborts.
     // `git stash create` builds a stash object without touching the stash
     // stack, giving a recoverable ref for WIP even if the update fails.
-    const backupBranch = process.env.CAREER_OPS_UPDATE_BACKUP_BRANCH || updateBackupBranchName(local);
+    const inheritedBackupBranch = process.env.CAREER_OPS_UPDATE_BACKUP_BRANCH || '';
+    const backupBranch = isReexec ? inheritedBackupBranch : updateBackupBranchName(local);
+    // Validate before any backup side effect. A malformed local VERSION must not
+    // leave an unpaired branch behind when targetRefForBackup() rejects it later.
+    const pairedTargetRef = targetRefForBackup(backupBranch);
     if (!isReexec) {
       try {
         const wip = git('stash', 'create');
@@ -3963,6 +4413,12 @@ async function apply() {
       ? pinInheritedTarget(inheritedTarget)
       : pinRefToCommit('FETCH_HEAD');
 
+    // Pair the attempted target with this run's backup as soon as it is pinned.
+    // Rollback reads this durable ref; FETCH_HEAD is process-global and any
+    // later fetch can move it. A re-exec inherits its parent's commit, so it
+    // re-pairs the same one.
+    git('update-ref', pairedTargetRef, targetCommit);
+
     // 2b. Verify the target before touching a single file, on both axes.
     //
     // IDENTITY: is this commit the ref we asked for? Only the parent asks.
@@ -3989,15 +4445,79 @@ async function apply() {
     if (refusal) {
       throw new Error(refusalMessage(targetCommit, refusal, isReexec));
     }
+    if (!isReexec) {
+      try {
+        pruneStaleTargetRefs();
+      } catch (err) {
+        // Retention housekeeping must not prevent an otherwise safe update.
+        console.error(`Updater warning: could not prune stale backup target refs (${err.message}).`);
+      }
+    }
+
+    // The fetched manifest is trusted updater code, but its paths still reach
+    // git. Validate their canonical form before even the self-bootstrap
+    // checkout, and fail closed when the target updater or its manifest is
+    // missing/corrupt. Whether an entry names the user layer is not decided
+    // here: rejectUserLayerPaths refuses those entry by entry (3a), so one bad
+    // entry cannot block every install.
+    const manifestUserPaths = effectiveUserPaths();
+    let remoteUpdaterSource;
+    try {
+      remoteUpdaterSource = git('show', `${targetCommit}:update-system.mjs`);
+    } catch (err) {
+      throw new Error(`Target updater is unreadable; refusing to update (${err.message})`);
+    }
+    let remoteSystemPaths = extractArrayFromSource(remoteUpdaterSource, 'SYSTEM_PATHS');
+    remoteSystemPaths = assertCanonicalManifestPaths(remoteSystemPaths, 'Target SYSTEM_PATHS');
+    const validatedManifestPaths = assertCanonicalManifestPaths(
+      mergePathLists(SYSTEM_PATHS, remoteSystemPaths, BOOTSTRAP_PATHS),
+      'Merged updater manifest',
+    );
 
     if (!isReexec) {
       const timeout = reexecTimeoutMs();
+      // The .bak copies of updater files this install had edited, for the catch:
+      // restoring from HEAD alone would leave those edits only in the .bak.
+      const bootstrapBackups = [];
+      // What this process checked out for the child, declared outside the try so
+      // the catch can put it back: a child that fails would otherwise leave the
+      // target's updater files in place over the old system files.
+      let checkedOutForReexec = [];
       try {
         // The re-exec runs the TARGET updater, so every local module it imports
         // at load time must exist first. Resolve the fetched update-system.mjs's
         // relative-import closure and check out exactly those files, so a future
         // new top-level import can't reintroduce the self-reexec crash (#1245).
-        const reexecFiles = resolveReexecCheckout(targetCommit, 'update-system.mjs');
+        const reexecFiles = assertCanonicalManifestPaths(
+          resolveReexecCheckout(targetCommit, 'update-system.mjs'),
+          'Target updater import closure',
+        );
+        const uncoveredReexecFiles = reexecFiles.filter(
+          (file) => !validatedManifestPaths.some((path) => pathMatchesManifest(file, path)),
+        );
+        if (uncoveredReexecFiles.length > 0) {
+          throw new Error(
+            `Target updater import closure is outside the validated manifest: ${uncoveredReexecFiles.join(', ')}`,
+          );
+        }
+        // This checkout runs before the re-exec'd updater reaches 3a, so the
+        // closure gets the same user-layer decision here. A refused manifest
+        // entry is skipped; a refused import cannot be, because the target
+        // updater would not load without it.
+        const { refused: refusedReexecFiles } = rejectUserLayerPaths(
+          reexecFiles,
+          manifestUserPaths,
+          manifestProbes({
+            trackedOutput: git('ls-files', '-z'),
+            upstreamOutput: git('ls-tree', '-r', '--name-only', '-z', targetCommit),
+          }),
+        );
+        if (refusedReexecFiles.length > 0) {
+          throw new Error(
+            `Target updater imports file(s) naming the user layer: ${refusedReexecFiles.join(', ')}. `
+            + 'Your files were NOT touched. Please report this — it is a manifest error.',
+          );
+        }
         const bootstrapAtRisk = locallyModifiedSystemFiles(reexecFiles, targetCommit);
         if (bootstrapAtRisk.length > 0) {
           console.log('');
@@ -4007,12 +4527,14 @@ async function apply() {
               console.log(`  ${result.file}  (could not write ${result.backup}: ${result.error})`);
             } else {
               console.log(`  ${result.file}  (local copy saved: ${result.backup})`);
+              bootstrapBackups.push(result);
             }
           }
           console.log('Self-bootstrap must load the upstream versions; the local versions remain in the backups above.');
           console.log('');
         }
-        git('checkout', targetCommit, '--', ...reexecFiles);
+        checkedOutForReexec = reexecFiles;
+        git('--literal-pathspecs', 'checkout', targetCommit, '--', ...reexecFiles);
         const marker = createReexecMarker();
         execFileSync(process.execPath, [
           'update-system.mjs',
@@ -4043,11 +4565,21 @@ async function apply() {
         });
         return;
       } catch (err) {
-        if (isTimeoutLikeError(err)) {
+        const timedOut = isTimeoutLikeError(err);
+        if (timedOut) {
           console.error(`Updater self-reexec timed out after ${timeoutSeconds(timeout)}s.`);
-          throw err;
+        } else {
+          console.error(`Updater self-reexec failed: ${err.message}`);
         }
-        console.error(`Updater self-reexec failed: ${err.message}`);
+        // The child restores what it checked out itself; the files it was
+        // loaded from are this process's to put back.
+        restoreAfterFailedUpdate(checkedOutForReexec, initialStatusPaths, { what: 'updater file(s) loaded to run the new version' });
+        restoreBootstrapBackups(bootstrapBackups);
+        if (timedOut) {
+          // A killed child may have stopped between two checkouts without
+          // restoring anything of its own.
+          console.error('Run `node update-system.mjs rollback` to return every system file to the version before this update.');
+        }
         throw err;
       }
     }
@@ -4055,14 +4587,6 @@ async function apply() {
     // 3. Checkout system files only
     console.log('Updating system files...');
     const updated = [];
-    let remoteSystemPaths = [];
-    try {
-      const remoteUpdaterSource = git('show', `${targetCommit}:update-system.mjs`);
-      remoteSystemPaths = extractArrayFromSource(remoteUpdaterSource, 'SYSTEM_PATHS');
-    } catch {
-      // Older targets may not have update-system.mjs. Fall back to the
-      // local manifest plus bootstrap paths below.
-    }
 
     // 3a. Keep bootstrap paths as a fallback for very old targets, but the
     // target updater's SYSTEM_PATHS is now the source of truth for new files.
@@ -4200,7 +4724,19 @@ async function apply() {
         // any file(s)" (#3824).
         const spec = path.endsWith('/') ? path.slice(0, -1) : path;
         const absentUpstream = probeAbsentUpstream(spec, targetCommit);
-        if (!checkoutErrorIsBenign(err, { absentUpstream, preservedState })) throw err;
+        if (!checkoutErrorIsBenign(err, { absentUpstream, preservedState })) {
+          // Rethrowing alone left every path checked out before this one at the
+          // new version, uncommitted, under the old VERSION: a half-updated
+          // install that `check` still reports as needing the update. The path
+          // that failed is restored on its own, after the others: git may have
+          // updated its index entry or written part of a directory before
+          // failing, and whatever made it fail (a file held open) can make its
+          // restore fail too, which must not be reported as the others failing.
+          console.error(`Update stopped while checking out ${path}.`);
+          restoreAfterFailedUpdate(updated, initialStatusPaths, { what: 'system path(s) it had already updated', exclude: preservedPaths });
+          restoreAfterFailedUpdate([path], initialStatusPaths, { what: `path it stopped on (${path})`, exclude: preservedPaths });
+          throw err;
+        }
         skippedPaths.push(path);
       }
     }
@@ -4233,7 +4769,7 @@ async function apply() {
         // so a preserved file with no upstream counterpart was backed up to
         // .bak by the block above and then unlinked by this one in the same run.
         const staleCandidates = staleSystemFiles(
-          localFiles, remoteFiles, SYSTEM_PATHS, mergePathLists(USER_PATHS, preservedPaths), configuredVariants,
+          localFiles, remoteFiles, updatePaths, mergePathLists(manifestUserPaths, preservedPaths), configuredVariants,
         );
         for (const f of staleCandidates) {
           if (isReferencedByPreservedFile(
@@ -4341,7 +4877,7 @@ async function apply() {
       const changed = gitStatusEntries()
         .map((entry) => entry.path)
         .filter((file) => !initialStatusPaths.has(file) && !generatedBackupPaths.has(file));
-      for (const file of userLayerViolations(changed, updatePaths, effectiveUserPaths())) {
+      for (const file of userLayerViolations(changed, updatePaths, manifestUserPaths)) {
         console.error(`SAFETY VIOLATION: User file was modified: ${file}`);
         violatedUserPaths.add(file);
       }
@@ -4351,7 +4887,7 @@ async function apply() {
       // through. Revert what we already applied and abort.
       console.error(`Aborting: could not validate user-layer safety (${err.message}).`);
       try {
-        revertPaths(updated, initialStatusPaths);
+        revertPaths(updated, initialStatusPaths, { exclude: preservedPaths });
       } catch (revertErr) {
         // If the revert itself fails (likely whatever broke `git
         // status` also broke `git checkout --`), don't lose the
@@ -4375,7 +4911,7 @@ async function apply() {
       // what to do with them.
       const violation = new Error('Update aborted: user files were touched.');
       try {
-        revertPaths([...updated], initialStatusPaths);
+        revertPaths([...updated], initialStatusPaths, { exclude: preservedPaths });
       } catch (revertErr) {
         // If the revert itself fails, don't lose the safety-violation
         // diagnostic — chain it via `cause` so the user sees both.
@@ -4501,7 +5037,7 @@ async function apply() {
       if (usedIndexCommit) {
         git('commit', '-m', `chore: auto-update system files to v${remote}`);
       } else {
-        git('commit', '-m', `chore: auto-update system files to v${remote}`, '--', ...expandedPathsToStage);
+        commitPathspecs(`chore: auto-update system files to v${remote}`, expandedPathsToStage);
       }
     } catch (e) {
       let commitFailed = false;
@@ -4518,14 +5054,23 @@ async function apply() {
       }
 
       if (commitFailed) {
-        const pathspec = expandedPathsToStage.map(p => `'${p.replace(/'/g, "'\\''")}'`).join(' ');
         // Print the command matching the path actually taken. Suggesting the
         // pathspec form after the index form was selected would tell the user to
         // run the very thing that drops the staged mode bits — a recovery step
         // that quietly reintroduces the bug it is recovering from.
+        // The pathspec form reads its list from a file: printed inline, 1,593
+        // paths ran to 55,564 characters, a command no Windows shell can run
+        // (#5103). Should even that file be unwritable, the inline list is
+        // still the right command on a platform without the ceiling.
+        let pathspecArgs;
+        try {
+          pathspecArgs = `"--pathspec-from-file=${e.pathspecFile ?? writePathspecFile(expandedPathsToStage)}" --pathspec-file-nul`;
+        } catch {
+          pathspecArgs = `-- ${expandedPathsToStage.map(p => `'${p.replace(/'/g, "'\\''")}'`).join(' ')}`;
+        }
         const recovery = usedIndexCommit
           ? `git commit -m "chore: auto-update system files to v${remote}"`
-          : `git commit -m "chore: auto-update system files to v${remote}" -- ${pathspec}`;
+          : `git commit -m "chore: auto-update system files to v${remote}" ${pathspecArgs}`;
         throw new Error(
           `Update commit failed (files may be staged but not committed).\n` +
           `    Error: ${e.message.split('\n')[0]}\n` +
@@ -4583,97 +5128,289 @@ async function apply() {
 
 // ── ROLLBACK ────────────────────────────────────────────────────
 
+// A concrete manifest filename is still unsafe to access when one of its
+// existing parent directories has been replaced by a symlink/junction. Both
+// checkout and rm could otherwise follow that parent outside the repository.
+function symlinkedAncestor(path, root = ROOT) {
+  const segments = path.split('/');
+  let current = root;
+  for (let i = 0; i < segments.length - 1; i++) {
+    current = join(current, segments[i]);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        return segments.slice(0, i + 1).join('/');
+      }
+      // Nothing below a non-directory parent can be reached; stop here and
+      // let nonDirectoryAncestor report it instead of failing with ENOTDIR.
+      if (!stat.isDirectory()) return null;
+    } catch (err) {
+      if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return null;
+      throw err;
+    }
+  }
+  return null;
+}
+
+function nonDirectoryAncestor(path, root = ROOT) {
+  const segments = path.split('/');
+  let current = root;
+  for (let i = 0; i < segments.length - 1; i++) {
+    current = join(current, segments[i]);
+    try {
+      const stat = lstatSync(current);
+      if (!stat.isDirectory() && !stat.isSymbolicLink()) {
+        return segments.slice(0, i + 1).join('/');
+      }
+    } catch (err) {
+      if (err?.code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+  return null;
+}
+
 function rollback() {
   // Same precondition as apply(): a nested .git-less install would look its
   // backup branches up — and check files out — in the enclosing repo (#3334).
   assertOwnGitToplevel();
-  // Find most recent backup branch
   try {
     const branches = git('for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads/backup-pre-update-*');
-    const latest = newestBackupBranch(branches);
-
+    const latest = rollbackBackupBranch(branches);
     if (!latest) {
       console.error('No backup branches found. Nothing to rollback.');
       process.exit(1);
     }
 
     console.log(`Rolling back to: ${latest}`);
+    const userPaths = effectiveUserPaths();
+    const warnRejected = (origin) => (path, reason) => {
+      console.error(`Rollback: ignoring unsafe ${origin} path ${JSON.stringify(path)} — ${reason}.`);
+    };
+    const safeCurrentPaths = filterSafeManifestPaths(
+      mergePathLists(SYSTEM_PATHS, BOOTSTRAP_PATHS),
+      userPaths,
+      warnRejected('current-manifest'),
+    );
 
-    // Checkout system files from backup branch.
-    //
-    // Two failure modes for `git checkout` here:
-    //   (a) the path didn't exist in the backup branch — the apply()
-    //       that produced this backup was on an older version that
-    //       didn't track this path yet. Rollback must DELETE the path
-    //       so the working tree mirrors the backup state.
-    //   (b) anything else — propagate so we don't silently leave the
-    //       working tree in a partially-restored state.
-    //
-    // Limitation: `git checkout <ref> -- <dir>` restores blobs from
-    // the backup tree but doesn't remove files that were added INSIDE
-    // an already-tracked directory between backup and rollback. Rolling
-    // back per-file via `git diff --name-status <backup>` would catch
-    // that but is a larger change; tracked separately if it ever bites.
-    const restored = [];
-    const removed = [];
-    for (const path of SYSTEM_PATHS) {
-      try {
-        git('checkout', latest, '--', path);
-        restored.push(path);
-      } catch (err) {
-        const pathspec = path.endsWith('/') ? path.slice(0, -1) : path;
-        let existedInBackup = true;
-        try {
-          git('cat-file', '-e', `${latest}:${pathspec}`);
-        } catch {
-          existedInBackup = false;
-        }
-        if (existedInBackup) {
-          throw err;
-        }
-        // Path was introduced by a later apply() — remove it so the
-        // tree truly matches the backup. `git rm` stages the deletion
-        // for tracked files; `rmSync` cleans up the untracked-but-
-        // on-disk case (e.g. an apply() that crashed between checkout
-        // and commit, leaving the path untracked locally).
-        git('rm', '-r', '-f', '--ignore-unmatch', '--', pathspec);
-        try {
-          rmSync(join(ROOT, pathspec), { recursive: true, force: true });
-        } catch {
-          // Already gone, or not present on disk — fine.
-        }
-        removed.push(pathspec);
-      }
-    }
-
-    // Same expansion as apply(), against the backup tree this rollback is
-    // restoring from. `restored` comes straight off SYSTEM_PATHS, so it carries
-    // the 53 directory entries, and addPaths forces every path it is given —
-    // `git add -f -- docs/` here would sweep the user's ignored files into the
-    // rollback commit exactly as it would have in apply().
-    if (restored.length > 0) addPaths(expandToShippedFiles(restored, latest));
-    const rollbackPaths = [...restored, ...removed];
-    // Keep rollback's scoped commit aligned with the file-level staging list.
-    // A directory pathspec would otherwise include tracked files still present
-    // in the worktree but absent from the backup tree (#3504).
-    const expandedRollbackPaths = expandToShippedFiles(rollbackPaths, latest);
+    // The backup's own updater knows files that may have retired from the
+    // current manifest. If it is a legacy backup without a readable manifest,
+    // current+bootstrap coverage still gives a conservative restore set.
+    let backupManifestPaths = [];
     try {
-      // Scope the commit to the rollback paths (#915 bug 2). A bare
-      // `git commit` would sweep unrelated staged files into the rollback.
-      if (expandedRollbackPaths.length > 0) {
-        git('commit', '-m', `chore: rollback system files from ${latest}`, '--', ...expandedRollbackPaths);
-      }
-    } catch {
-      // Tolerate any commit failure here — the common case is the
-      // "nothing to commit" no-op when the working tree already
-      // matched the backup (e.g. user ran rollback twice). This
-      // mirrors apply()'s broad-catch in the commit step; narrowing
-      // to a specific git-error string is fragile and would diverge
-      // from that pattern. Genuine setup problems (hooks, signing,
-      // disk full) will resurface on the next normal git operation.
+      const backupSource = git('show', `${latest}:update-system.mjs`);
+      const backupSystemPaths = extractArrayFromSource(backupSource, 'SYSTEM_PATHS');
+      const backupBootstrapPaths = extractArrayFromSource(backupSource, 'BOOTSTRAP_PATHS');
+      if (backupSystemPaths.length === 0) throw new Error('SYSTEM_PATHS is missing or empty');
+      backupManifestPaths = filterSafeManifestPaths(
+        mergePathLists(backupSystemPaths, backupBootstrapPaths),
+        userPaths,
+        warnRejected('backup-manifest'),
+      );
+    } catch (err) {
+      console.error(`Rollback warning: backup manifest is unavailable (${err.message}); restoring safe files known to the current updater.`);
     }
 
-    console.log(`Rollback complete. Restored ${restored.length} path(s) from ${latest}, removed ${removed.length} path(s) added after the backup.`);
+    const restoreCandidates = mergePathLists(safeCurrentPaths, backupManifestPaths);
+    const concreteWarnings = warnRejected('tree');
+    const backupFiles = manifestTreeFiles(restoreCandidates, latest, userPaths, {
+      onRejected: concreteWarnings,
+    });
+
+    // A paired target ref records exactly which release this backup preceded.
+    // It is the only safe source for target-only removals: FETCH_HEAD is mutable
+    // process-global state and may now identify an unrelated fetch.
+    let targetFiles = [];
+    let targetPairAvailable = false;
+    let targetRef = '';
+    try {
+      targetRef = targetRefForBackup(latest);
+      git('show-ref', '--verify', '--quiet', targetRef);
+      const targetSource = git('show', `${targetRef}:update-system.mjs`);
+      const targetSystemPaths = extractArrayFromSource(targetSource, 'SYSTEM_PATHS');
+      const targetBootstrapPaths = extractArrayFromSource(targetSource, 'BOOTSTRAP_PATHS');
+      if (targetSystemPaths.length === 0) throw new Error('target SYSTEM_PATHS is missing or empty');
+      const safeTargetPaths = filterSafeManifestPaths(
+        mergePathLists(targetSystemPaths, targetBootstrapPaths),
+        userPaths,
+        warnRejected('target-manifest'),
+      );
+      targetFiles = manifestTreeFiles(safeTargetPaths, targetRef, userPaths, {
+        onRejected: concreteWarnings,
+      });
+      targetPairAvailable = true;
+    } catch (err) {
+      console.error(`Rollback warning: paired target is missing or unavailable (${err.message}).`);
+      console.error('Target-only system files may remain as leftovers; mutable FETCH_HEAD was not consulted.');
+    }
+
+    // Restoration remains limited to safe manifest coverage, but deciding
+    // whether a target path is genuinely new requires the complete backup
+    // tree. A pre-existing tracked file can be absent from both the current
+    // and backup manifests after manifest drift; treating that omission as
+    // proof that the target introduced it would delete backup-owned bytes.
+    // Read the raw NUL-delimited tree before mutating the worktree and use it
+    // only as membership evidence, never as scope authority. Prefix membership
+    // is conservative across file/directory transitions: if either tree has a
+    // leaf where the other has descendants, that path was not wholly new.
+    const backupTreeFiles = targetPairAvailable
+      ? gitRaw('--literal-pathspecs', 'ls-tree', '-r', '--name-only', '-z', latest, '--')
+        .split('\0')
+        .filter(Boolean)
+      : [];
+    const backupTreeFileSet = new Set(backupTreeFiles);
+    const backupTreeFileKeySet = new Set();
+    const backupTreeDirectoryKeySet = new Set();
+    for (const file of backupTreeFiles) {
+      const segments = manifestPathSegments(file);
+      backupTreeFileKeySet.add(segments.join('/'));
+      for (let length = 1; length < segments.length; length++) {
+        backupTreeDirectoryKeySet.add(segments.slice(0, length).join('/'));
+      }
+    }
+    const backupTreeConflict = (file) => {
+      if (backupTreeFileSet.has(file)) return 'exact path';
+      const segments = manifestPathSegments(file);
+      const key = segments.join('/');
+      if (backupTreeFileKeySet.has(key)) return 'filesystem-equivalent backup path';
+      if (backupTreeDirectoryKeySet.has(key)) return 'backup directory at this path';
+      for (let length = segments.length - 1; length > 0; length--) {
+        const ancestor = segments.slice(0, length).join('/');
+        if (backupTreeFileKeySet.has(ancestor)) return `backup file at ancestor ${ancestor}`;
+      }
+      return '';
+    };
+
+    // apply() also overwrites a file the target manifest claims when it was
+    // already in the backup tree, even if neither restore manifest lists it.
+    // Restore those through the same guards, or they keep the update's bytes.
+    const backupFileSet = new Set(backupFiles);
+    const restoreFiles = [
+      ...backupFiles,
+      ...targetFiles.filter((file) => backupTreeFileSet.has(file) && !backupFileSet.has(file)),
+    ];
+
+    const restored = [];
+    for (const file of restoreFiles) {
+      try {
+        const symlink = symlinkedAncestor(file);
+        if (symlink) {
+          console.error(`Rollback warning: ${file} has symlinked parent ${symlink}; leaving it untouched.`);
+          continue;
+        }
+        const nonDirectory = nonDirectoryAncestor(file);
+        if (nonDirectory) {
+          console.error(`Rollback warning: ${file} has non-directory parent ${nonDirectory}; leaving it untouched.`);
+          continue;
+        }
+        if (existsSync(join(ROOT, file)) && lstatSync(join(ROOT, file)).isDirectory()) {
+          console.error(`Rollback warning: ${file} is now a directory; leaving it and its children untouched.`);
+          continue;
+        }
+        git('--literal-pathspecs', 'checkout', latest, '--', file);
+        restored.push(file);
+      } catch (err) {
+        throw new Error(`could not restore ${file}: ${err.message}`);
+      }
+    }
+
+    const removalCandidates = [];
+    if (targetPairAvailable) {
+      for (const file of targetFiles) {
+        const conflict = backupTreeConflict(file);
+        if (!conflict) {
+          removalCandidates.push(file);
+        } else if (conflict !== 'exact path') {
+          console.error(`Rollback warning: ${file} conflicts with the backup tree (${conflict}); leaving it untouched.`);
+        }
+      }
+    }
+    // Tree membership says the target ships the path, not that this update
+    // wrote it. The update's checkout stages what it writes, so an untracked
+    // file there may be the user's own, kept by apply or never reached by it.
+    // Rollback cannot tell, and removing it could lose bytes no backup holds.
+    const trackedFileSet = removalCandidates.length > 0
+      ? new Set(gitRaw('ls-files', '-z').split('\0').filter(Boolean))
+      : new Set();
+    const removed = [];
+    for (const file of removalCandidates) {
+      const absolute = join(ROOT, file);
+      try {
+        const symlink = symlinkedAncestor(file);
+        if (symlink) {
+          console.error(`Rollback warning: ${file} has symlinked parent ${symlink}; leaving it untouched.`);
+          continue;
+        }
+        // Same guard as the restore loop. With a regular file where a parent
+        // directory used to be, there is nothing to remove at this path, and
+        // recording it as removed would misreport what rollback did.
+        const nonDirectory = nonDirectoryAncestor(file);
+        if (nonDirectory) {
+          console.error(`Rollback warning: ${file} has non-directory parent ${nonDirectory}; leaving it untouched.`);
+          continue;
+        }
+        if (existsSync(absolute) && lstatSync(absolute).isDirectory()) {
+          console.error(`Rollback warning: ${file} became a directory; leaving it and its children untouched.`);
+          continue;
+        }
+        if (!trackedFileSet.has(file)) {
+          if (existsSync(absolute)) {
+            console.error(`Rollback warning: ${file} is not tracked, so rollback cannot tell whether this update wrote it; leaving it untouched.`);
+          }
+          continue;
+        }
+        git('--literal-pathspecs', 'rm', '-f', '--ignore-unmatch', '--', file);
+        try { unlinkSync(absolute); } catch (err) {
+          if (existsSync(absolute)) throw err;
+        }
+        removed.push(file);
+      } catch (err) {
+        throw new Error(`could not remove target-only file ${file}: ${err.message}`);
+      }
+    }
+
+    // Restore and stage only concrete backup files. `git rm` already staged
+    // target-only deletions; no directory pathspec is ever passed to add/commit.
+    if (restored.length > 0) addPaths(restored);
+    const concreteRollbackPaths = mergePathLists(restored, removed);
+    // Commit from the index, not from the path list. The concrete list runs to
+    // well over a thousand files, which exceeds the Windows command-line limit
+    // as one argv. Only what is staged can be committed, so name just those
+    // paths, and only when something unrelated is staged alongside them.
+    const rollbackPathSet = new Set(concreteRollbackPaths);
+    const stagedRollbackPaths = gitRaw('diff', '--cached', '--name-only', '-z')
+      .split('\0')
+      .filter((path) => path !== '' && rollbackPathSet.has(path));
+    // A second rollback has nothing staged, and so nothing to commit.
+    if (stagedRollbackPaths.length > 0) {
+      const message = `chore: rollback system files from ${latest}`;
+      const scoped = stagedPathsOutside(concreteRollbackPaths).length > 0;
+      try {
+        if (!scoped) {
+          git('commit', '-m', message);
+        } else {
+          commitPathspecs(message, stagedRollbackPaths, { literal: true });
+        }
+      } catch (err) {
+        // Something unrelated is staged on the scoped path, so a bare
+        // `git commit` would sweep it in. Name the file commitPathspecs left.
+        let recovery = 'Fix the cause and commit the staged files.';
+        if (scoped) {
+          try {
+            recovery = `Fix the cause, then run: git --literal-pathspecs commit -m "${message}" `
+              + `"--pathspec-from-file=${err.pathspecFile ?? writePathspecFile(stagedRollbackPaths)}" --pathspec-file-nul`;
+          } catch {
+            recovery = 'Fix the cause and commit only the rollback files; other staged work would go in with them.';
+          }
+        }
+        throw new Error(
+          `the files were restored and staged, but the rollback commit failed (${err.message}). `
+          + recovery,
+        );
+      }
+    }
+
+    console.log(`Rollback complete. Restored ${restored.length} file(s) from ${latest}, removed ${removed.length} target-only file(s).`);
     console.log('Your data (CV, profile, tracker, reports) was not affected.');
   } catch (err) {
     console.error('Rollback failed:', err.message);
