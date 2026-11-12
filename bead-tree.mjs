@@ -25,9 +25,9 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { GLYPH } from './lavish-resume.mjs';
-import { beadIndex, loadSidecar } from './payload-beads.mjs';
+import { beadIndex, frameBulletIds, loadSidecar } from './payload-beads.mjs';
 import { readStore } from './resume-beads.mjs';
-import { FAIL_LABEL, NOTE_MARK, checkBead, checkManifest, roleOfRef, roleOfSection } from './bead-typecheck.mjs';
+import { FAIL_LABEL, NOTE_MARK, FIX_NOTE, checkBead, fixBead, checkManifest, roleOfRef, roleOfSection } from './bead-typecheck.mjs';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -82,6 +82,12 @@ const nodeFor = (id, idx, extra = {}) => {
 export function manifestSummaryBead(resumeBead) {
   const e = (resumeBead ? parseManifest(resumeBead).careerSummary : null) || [];
   return e.find((x) => x.bead)?.bead ?? null;
+}
+
+/** Bead ids of the manifest's workExperience, in the order the résumé shows them. */
+export function manifestExperienceBeads(resumeBead) {
+  const e = (resumeBead ? parseManifest(resumeBead).workExperience : null) || [];
+  return e.map((x) => x.bead).filter(Boolean);
 }
 
 export function loadResumeBead(resumeId) {
@@ -161,7 +167,9 @@ export function buildTree(resumeId, idx, side = null, resumeBead = loadResumeBea
       const parent = m ? frames.get(Number(m[1])) : null;
       if (parent) {
         const known = manifest.get(b.bead);
-        const n = known ?? { ...nodeFor(b.bead, idx), ref, origin: 'payload', roles: ['bullet'], note: parent.origin === 'payload' ? PAYLOAD_ONLY : 'bound in payload, not listed in the manifest', source: b.source };
+        // A job bead owns its bullets (metadata.bullets), so a bullet it lists is in the résumé bead's tree.
+        const owned = frameBulletIds(idx.get(parent.id)?.bead)?.includes(b.bead);
+        const n = known ?? { ...nodeFor(b.bead, idx), ref, origin: owned ? 'both' : 'payload', roles: ['bullet'], note: owned ? 'listed by its job bead' : parent.origin === 'payload' ? PAYLOAD_ONLY : 'bound in payload, not listed in the manifest', source: b.source };
         if (known) { known.origin = 'both'; known.roles = [...(known.roles ?? []), 'bullet']; }
         if (!parent.children.includes(n)) parent.children.push(n);
       } else {
@@ -351,20 +359,53 @@ function text(root) {
   return lines.join('\n');
 }
 
+/**
+ * The one type-check path: build the tree, collect failures, and (by default) write the
+ * label + notes line onto each failing bead so a reader of the beads alone can see it.
+ */
+/**
+ * Apply the mechanical fixes fixBead names (a bullet missing its final period)
+ * to every bead the tree uses. Each write is noted on the bead; the edit
+ * un-confirms it, which is intended: the wording changed. Returns the ids fixed.
+ */
+export function autofixBeads(root, idx) {
+  const fixed = [];
+  const call = (store, args) => execFileSync(join(homedir(), '.local', 'bin', store), args, { encoding: 'utf8', timeout: 30000 });
+  for (const n of flattenTree(root)) {
+    const hit = n.id ? idx.get(n.id) : null;
+    if (!hit || !n.roles) continue;
+    const next = n.roles.filter(Boolean).map((r) => fixBead(r, hit.bead)).find(Boolean);
+    if (!next) continue;
+    try {
+      call(hit.store, ['update', n.id, '-d', next, '--append-notes', `${FIX_NOTE} added the missing trailing period (bullets must end with ".")`]);
+      fixed.push(n.id);
+    } catch { /* a store that refuses the write keeps the type-check problem */ }
+  }
+  return fixed;
+}
+
+export function typecheckResume(resumeId, payload = null, { sync = true } = {}) {
+  const side = payload ? loadSidecar(payload) : null;
+  let idx = beadIndex();
+  let tree = buildTree(resumeId, idx, side);
+  const autofixed = sync ? autofixBeads(tree, idx) : [];
+  if (autofixed.length) { idx = beadIndex(); tree = buildTree(resumeId, idx, side); }
+  const failures = flattenTree(tree).filter((n) => n.problems?.length).map((n) => ({ id: n.id, problems: n.problems }));
+  for (const p of tree.problems ?? []) failures.push({ id: resumeId, problems: [p] });
+  const synced = sync ? syncTypeLabels(tree, idx) : null;
+  return { tree, idx, failures, synced, autofixed };
+}
+
 if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
-  const sync = args.includes('--sync');
   const [resumeId, payload] = args.filter((x) => !x.startsWith('--'));
   if (!resumeId) {
-    console.error('usage: node bead-tree.mjs <resume-bead-id> [payload.json]');
+    console.error('usage: bun bead-tree.mjs <resume-bead-id> [payload.json] [--no-sync]');
     process.exitCode = 2;
   } else {
-    const side = payload ? loadSidecar(payload) : null;
-    const idx = beadIndex();
-    const tree = buildTree(resumeId, idx, side);
+    const { tree, failures, synced } = typecheckResume(resumeId, payload, { sync: !args.includes('--no-sync') });
     console.log(text(tree));
-    for (const n of flattenTree(tree)) if (n.problems?.length) console.log(`⚠ ${n.id}: ${n.problems.join('; ')}`);
-    for (const p of tree.problems ?? []) console.log(`⚠ ${resumeId}: ${p}`);
-    if (sync) console.log(JSON.stringify(syncTypeLabels(tree, idx)));
+    for (const f of failures) console.log(`⚠ ${f.id}: ${f.problems.join('; ')}`);
+    if (synced) console.log(JSON.stringify(synced));
   }
 }

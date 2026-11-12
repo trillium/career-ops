@@ -307,6 +307,26 @@ version: 1.0.0
   .cert-org { flex: 1; color: #2a3340; }
   .cert-year { font-size: 8.5px; color: #626b78; white-space: nowrap; }
 
+  /* Award rows mirror a job header: title like the company line, year like the
+     dates, issuer like the role line, so the two section types read alike. */
+  .award-item {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    column-gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .award-title { grid-column: 1; grid-row: 1; font-size: 10.5px; font-weight: 700; color: var(--accent-color); }
+  .award-title a { font-weight: 400; color: var(--accent-color); text-decoration: underline; }
+  .award-year { grid-column: 2; grid-row: 1; font-size: 8.5px; color: #626b78; white-space: nowrap; text-align: right; }
+  .award-org { grid-column: 1; grid-row: 2; font-size: 9.5px; font-weight: 600; color: #2a3340; }
+
+  .award-group { margin-bottom: 5px; }
+  .award-bullets { margin-top: 2px; padding-left: 13px; }
+  .award-bullets li { margin-bottom: 1px; text-align: justify; }
+  .award-bullets a { color: var(--accent-color); text-decoration: underline; }
+
   /* === SKILLS === */
   .skills-grid { display: block; }
 

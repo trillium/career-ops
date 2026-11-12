@@ -16,10 +16,12 @@
  * line) never touches the description, so confirmation (a hash of the
  * description) is not disturbed.
  *
- * Usage:  node bead-typecheck.mjs <resume-id> [payload.json] [--sync]
+ * Usage:  bun bead-typecheck.mjs <resume-id> [payload.json] [--no-sync]
+ *   Prints failures, labels/notes the failing beads (unless --no-sync), exit 1 if any fail.
  */
 
 import * as yaml from 'js-yaml';
+import { isMainModule } from './lib/is-main-module.mjs';
 
 export const FAIL_LABEL = 'does-not-pass-type-check';
 export const NOTE_MARK = 'TYPE CHECK:';
@@ -29,7 +31,7 @@ const FRAME_ROOTS = ['workExperience', 'openSource', 'projects', 'education'];
 export function roleOfSection(name) {
   return ({
     header: 'header', careerSummary: 'summary', workExperience: 'frame', openSource: 'frame', projects: 'frame',
-    education: 'education', skills: 'skill', awards: 'bullet', bullets: 'bullet', technical: 'section', coverLetter: 'coverLetter',
+    education: 'education', skills: 'skill', awards: 'awardGroup', bullets: 'bullet', technical: 'section', coverLetter: 'coverLetter',
   })[name] ?? null;
 }
 
@@ -39,8 +41,24 @@ export function roleOfRef(ref) {
   if (/#frame$/.test(ref)) return 'frame';
   if (/^education\[/.test(ref)) return 'education';
   if (/^skills\[/.test(ref)) return 'skill';
-  if (/^(experience\[\d+\]\.bullets|awards)\[/.test(ref)) return 'bullet';
+  if (/^(experience\[\d+\]\.bullets)\[/.test(ref)) return 'bullet';
   return null;
+}
+
+export const FIX_NOTE = 'AUTOFIX:';
+
+/**
+ * The text a bead should have when a problem is mechanical, or null when it
+ * already conforms (or the fix is not mechanical). Today: a bullet bead's prose
+ * must end with ".", so one that does not gets it appended. Never touches YAML
+ * or frame beads. Pure; the caller writes it.
+ */
+export function fixBead(role, bead) {
+  const text = bead?.description;
+  if (role !== 'bullet' || typeof text !== 'string' || !text.trim()) return null;
+  if (checkBead(role, bead).some((p) => p.startsWith('bound as a bullet'))) return null;
+  const t = text.trimEnd();
+  return t.endsWith('.') ? null : `${t}.`;
 }
 
 const parse = (text) => {
@@ -54,8 +72,15 @@ export function checkBead(role, bead) {
 
   if (role === 'bullet') {
     if (looksStructured) return ['bound as a bullet but its text is YAML/a frame; a bullet bead is one plain line of prose'];
-    if (text.trim().split('\n').length > 3) return ['bullet text is more than 3 lines'];
-    return [];
+    const out = [];
+    if (text.trim().split('\n').length > 3) out.push('bullet text is more than 3 lines');
+    if (/[\u2014\u2013]/.test(text)) out.push('bullet contains an em dash or en dash; reword without one');
+    if (!text.trim().endsWith('.')) out.push('bullet does not end with a period');
+    return out;
+  }
+  if (role === 'awardGroup') {
+    const m = /^\s*title:\s*\S/m.test(text);
+    return m ? [] : ['an award group bead needs a "title:" line (e.g. "title: Speaking")'];
   }
   if (role === 'summary') {
     if (!/^\s*careerSummary:/.test(text)) return []; // plain prose is accepted
@@ -119,4 +144,17 @@ export function checkManifest(bead) {
     });
   }
   return out;
+}
+
+if (isMainModule(import.meta.url)) {
+  const args = process.argv.slice(2);
+  const [resumeId, payload] = args.filter((x) => !x.startsWith('--'));
+  if (!resumeId) { console.error('usage: bun bead-typecheck.mjs <resume-id> [payload.json] [--no-sync]'); process.exit(2); }
+  const { typecheckResume } = await import('./bead-tree.mjs');
+  const { failures, synced, autofixed } = typecheckResume(resumeId, payload, { sync: !args.includes('--no-sync') });
+  if (autofixed?.length) console.log(`fixed ${autofixed.length}: added trailing period to ${autofixed.join(', ')}`);
+  for (const f of failures) console.log(`✗ ${f.id}: ${f.problems.join('; ')}`);
+  if (synced) console.log(`labelled ${synced.labelled.length}, cleared ${synced.cleared.length}`);
+  console.log(failures.length ? `${failures.length} bead(s) do not pass type check` : 'all beads pass type check');
+  process.exit(failures.length ? 1 : 0);
 }

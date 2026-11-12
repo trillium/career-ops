@@ -602,14 +602,48 @@ function buildCertifications(entries, partial) {
 // laid out on one baseline. Kept as its own builder rather than an alias so the
 // two can diverge (and so awards.html can be authored independently of
 // certifications.html) without one section's markup leaking into the other.
+// An award with a url shows its title as plain text followed by a link
+// ("title | <a>Video Link</a>"); link_label names the link (default "Link").
+// Without a url it is escaped text. PDFs keep the anchor as a live link.
+function awardTitleHtml(e) {
+  const url = sanitizeUrl(e.url);
+  const text = escapeHtml(e.title || '');
+  return url ? `${text} | <a href="${url}">${escapeHtml(e.link_label || 'Link')}</a>` : text;
+}
+
+// A grouped award ("Speaking", "Technical Writing") carries bullets and renders
+// like a job: a title row, then a bulleted list. A bullet is a string, or
+// { text, url, link_label } for a line that ends in a link ("text | <a>label</a>").
+function awardGroupHtml(e) {
+  const year = e.year ? `<span class="award-year">${escapeHtml(e.year)}</span>` : '';
+  const items = e.bullets.filter(Boolean).map((x) => {
+    const o = typeof x === 'string' ? { text: x } : x;
+    const url = sanitizeUrl(o.url);
+    const link = url ? ` | <a href="${url}">${escapeHtml(o.link_label || 'Link')}</a>` : '';
+    const text = url ? String(o.text || '').replace(/\.$/, '') : (o.text || '');
+    return `<li>${escapeHtml(text)}${link}</li>`;
+  }).join('\n      ');
+  return `<div class="award-group">
+    <div class="award-item"><span class="award-title">${escapeHtml(e.title)}</span>${year}</div>
+    <ul class="award-bullets">
+      ${items}
+    </ul>
+  </div>`;
+}
+
 function buildAwards(entries, partial) {
   if (!Array.isArray(entries) || entries.length === 0) return '';
+  if (entries.some((e) => Array.isArray(e?.bullets) && e.bullets.length)) {
+    return entries.filter((e) => e && e.title).map((e) => (Array.isArray(e.bullets) && e.bullets.length
+      ? awardGroupHtml(e)
+      : buildAwards([e], partial))).join('\n    ');
+  }
   if (!partial) {
     return entries.filter(e => hasRequiredFields(e, 'awards', 'html')).map(e => {
       const org = e.org ? `<span class="award-org">${escapeHtml(e.org)}</span>` : '<span class="award-org"></span>';
       const year = e.year ? `<span class="award-year">${escapeHtml(e.year)}</span>` : '<span class="award-year"></span>';
       return `<div class="award-item">
-      <span class="award-title">${escapeHtml(e.title)}</span>
+      <span class="award-title">${awardTitleHtml(e)}</span>
       ${org}
       ${year}
     </div>`;
@@ -625,7 +659,7 @@ function buildAwards(entries, partial) {
       ['YEAR_BLOCK', { value: escapeHtml(e.year || ''), present: Boolean(e.year) }],
     ]);
     return fillEntry(entryTemplate, blocks, {
-      TITLE: escapeHtml(e.title || ''),
+      TITLE: awardTitleHtml(e),
       ORG:   escapeHtml(e.org || ''),
       YEAR:  escapeHtml(e.year || ''),
     }, blockValues);

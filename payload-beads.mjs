@@ -124,6 +124,160 @@ export function withManifestSummary(side, summaryBeadId, resumeId) {
   return { ...side, bindings: { ...side.bindings, summary: { bead: summaryBeadId, source: `manifest:${resumeId}` } } };
 }
 
+/**
+ * The résumé bead's manifest owns which jobs appear and in what order
+ * (sections.workExperience, top to bottom). Re-order and filter payload.experience
+ * to match, and re-index the sidecar's experience[i] refs to follow. A payload
+ * entry whose frame bead the manifest does not list is dropped; one with no frame
+ * binding is kept last (it cannot be placed, and silently dropping it would lose
+ * text). Manifest beads with no payload entry cannot be rendered and come back in
+ * `missing`. Pure; neither file is written. No manifest list -> unchanged.
+ */
+export function withManifestExperience(payload, side, manifestBeadIds) {
+  const ids = (manifestBeadIds || []).filter(Boolean);
+  const entries = payload.experience || [];
+  if (!ids.length || !entries.length) return { payload, side, missing: [], dropped: [] };
+  const frameOf = (i) => side.bindings[`experience[${i}]#frame`]?.bead ?? null;
+  const used = new Set();
+  const order = [];
+  const missing = [];
+  for (const id of ids) {
+    const i = entries.findIndex((_, k) => !used.has(k) && frameOf(k) === id);
+    if (i < 0) missing.push(id);
+    else { used.add(i); order.push(i); }
+  }
+  const dropped = [];
+  entries.forEach((_, i) => {
+    if (used.has(i)) return;
+    if (frameOf(i)) dropped.push(frameOf(i));
+    else order.push(i);
+  });
+  const newIndex = new Map(order.map((oldI, newI) => [oldI, newI]));
+  const bindings = {};
+  for (const [ref, v] of Object.entries(side.bindings)) {
+    const m = ref.match(/^experience\[(\d+)\](.*)$/);
+    if (!m) { bindings[ref] = v; continue; }
+    const ni = newIndex.get(Number(m[1]));
+    if (ni !== undefined) bindings[`experience[${ni}]${m[2]}`] = v;
+  }
+  return {
+    payload: { ...payload, experience: order.map((i) => entries[i]) },
+    side: { ...side, bindings },
+    missing,
+    dropped,
+  };
+}
+
+/**
+ * A section the résumé bead's manifest lists as an empty array is dropped from
+ * the payload (and its bindings), so removing a section is a manifest edit and
+ * the stale payload copy cannot bring it back. Only the sections named in
+ * `names` are considered; a missing or non-empty manifest list changes nothing.
+ */
+export function withManifestEmptySections(payload, side, manifestSections, names = ['education']) {
+  const gone = names.filter((n) => Array.isArray(manifestSections?.[n]) && manifestSections[n].length === 0 && payload[n]);
+  if (!gone.length) return { payload, side };
+  const next = { ...payload };
+  for (const n of gone) delete next[n];
+  const bindings = Object.fromEntries(Object.entries(side.bindings).filter(([ref]) => !gone.some((n) => ref.startsWith(`${n}[`))));
+  return { payload: next, side: { ...side, bindings } };
+}
+
+/**
+ * Leadership & Accolades come from the résumé bead's manifest: sections.awards
+ * lists group beads (description `title: Speaking`, metadata.bullets = ordered
+ * bullet bead ids); each bullet bead is one line of prose and may carry
+ * metadata.url / metadata.link_label for its link. Replaces payload.awards and
+ * drops its stale sidecar bindings. No manifest entry with a bead: untouched. Pure.
+ */
+export function withManifestAwards(payload, side, manifestSections, idx) {
+  const groups = (manifestSections?.awards || []).map((e) => e?.bead).filter(Boolean);
+  if (!groups.length) return { payload, side, missing: [] };
+  const missing = [];
+  const awards = [];
+  for (const gid of groups) {
+    const g = idx.get(gid)?.bead;
+    if (!g) { missing.push(gid); continue; }
+    const title = (String(g.description || '').match(/^\s*title:\s*(.+?)\s*$/m) || [])[1]?.replace(/^["']|["']$/g, '') || g.title;
+    const bullets = [];
+    for (const id of frameBulletIds(g) || []) {
+      const b = idx.get(id)?.bead;
+      if (!b) { missing.push(id); continue; }
+      const text = String(b.description || '').trim();
+      bullets.push(b.metadata?.url ? { text, url: b.metadata.url, link_label: b.metadata.link_label || 'Link' } : text);
+    }
+    awards.push({ title, bullets });
+  }
+  const bindings = Object.fromEntries(Object.entries(side.bindings).filter(([ref]) => !ref.startsWith('awards[')));
+  return { payload: { ...payload, awards }, side: { ...side, bindings }, missing };
+}
+
+/** The ordered bullet bead ids a frame bead lists in metadata.bullets, or null. */
+export function frameBulletIds(frameBead) {
+  let v = frameBead?.metadata?.bullets;
+  if (typeof v === 'string') { try { v = JSON.parse(v); } catch { return null; } }
+  return Array.isArray(v) && v.length ? v.map(String) : null;
+}
+
+/**
+ * A job's frame bead owns the order and membership of its bullets
+ * (metadata.bullets: bullet bead ids, top to bottom); each bullet bead owns only
+ * its content. Re-order experience[i].bullets to match and re-index the sidecar's
+ * experience[i].bullets[j] refs. A bullet bound to a bead the frame does not list
+ * is dropped; an unbound one stays last. A frame with no list is untouched. A listed
+ * bead the payload lacks is added from the bead's own text; one that is not a bead at all comes back in `missing`. Pure.
+ */
+export function withFrameBullets(payload, side, idx) {
+  const missing = [];
+  const bindings = { ...side.bindings };
+  const experience = (payload.experience || []).map((entry, i) => {
+    const ids = frameBulletIds(idx.get(side.bindings[`experience[${i}]#frame`]?.bead)?.bead);
+    if (!ids) return entry;
+    const bullets = entry.bullets || [];
+    const beadOf = (j) => side.bindings[`experience[${i}].bullets[${j}]`]?.bead ?? null;
+    const used = new Set();
+    const order = []; // payload index, or {bead} for a bullet the frame lists that the payload lacks
+    for (const id of ids) {
+      const j = bullets.findIndex((_, k) => !used.has(k) && beadOf(k) === id);
+      if (j >= 0) { used.add(j); order.push(j); }
+      else if (idx.has(id)) order.push({ bead: id }); // new on the bead side: the page takes its text from the bead
+      else missing.push(id);
+    }
+    bullets.forEach((_, j) => { if (!used.has(j) && !beadOf(j)) order.push(j); });
+    for (const ref of Object.keys(bindings)) if (ref.startsWith(`experience[${i}].bullets[`)) delete bindings[ref];
+    order.forEach((o, newJ) => {
+      if (typeof o === 'object') { bindings[`experience[${i}].bullets[${newJ}]`] = { bead: o.bead, source: idx.get(o.bead).store }; return; }
+      const b = side.bindings[`experience[${i}].bullets[${o}]`];
+      if (b) bindings[`experience[${i}].bullets[${newJ}]`] = b;
+    });
+    return { ...entry, bullets: order.map((o) => (typeof o === 'object' ? idx.get(o.bead).bead.description.trim() : bullets[o])) };
+  });
+  return { payload: { ...payload, experience }, side: { ...side, bindings }, missing };
+}
+
+/** `position:` / `company:` as the frame bead's description states them, or null. */
+export function frameFields(description) {
+  const pick = (key) => {
+    const m = String(description || '').match(new RegExp(`^\\s*[•*-]?\\s*${key}:\\s*(.+?)\\s*$`, 'm'));
+    return m ? m[1].replace(/^["']|["']$/g, '') : null;
+  };
+  return { role: pick('position'), company: pick('company'), location: pick('location') };
+}
+
+/**
+ * A job's title and company line come from its frame bead, not the payload copy,
+ * so renaming a role in the bead renames it on the page. Pure.
+ */
+export function withFrameFields(payload, side, idx) {
+  const experience = (payload.experience || []).map((entry, i) => {
+    const hit = idx.get(side.bindings[`experience[${i}]#frame`]?.bead);
+    if (!hit) return entry;
+    const f = frameFields(hit.bead.description);
+    return { ...entry, ...(f.role ? { role: f.role } : {}), ...(f.company ? { company: f.company } : {}), ...(f.location ? { location: f.location } : {}) };
+  });
+  return { ...payload, experience };
+}
+
 /** Create the sidecar, or add bindings for refs it lacks. Never overwrites one. */
 export function bindPayload(payloadPath, { write = true } = {}) {
   const payload = JSON.parse(readFileSync(payloadPath, 'utf8'));
@@ -263,4 +417,19 @@ export function withHeaderBead(payload, bead) {
     else if (['linkedin', 'github', 'portfolio'].includes(k.kind)) c[k.kind] = { url: k.url, display: k.label };
   }
   return { ...payload, candidate: c };
+}
+
+/**
+ * A bead may be referenced once across a résumé: in the manifest's sections or
+ * in a job's metadata.bullets. Returns [{bead, where: [..]}] for every bead
+ * listed more than once (inside one list or across lists).
+ * @param {{sections?: Record<string, {bead?: string}[]>}} manifest
+ * @param {Record<string, string[]>} frameBullets job bead id -> its metadata.bullets ids
+ */
+export function findDuplicateBeads(manifest, frameBullets = {}) {
+  const seen = new Map();
+  const add = (bead, where) => { if (bead) seen.set(bead, [...(seen.get(bead) || []), where]); };
+  for (const [name, entries] of Object.entries(manifest?.sections || {})) (entries || []).forEach((e) => add(e?.bead, `sections.${name}`));
+  for (const [job, ids] of Object.entries(frameBullets)) (ids || []).forEach((id) => add(id, `${job}.metadata.bullets`));
+  return [...seen].filter(([, w]) => w.length > 1).map(([bead, where]) => ({ bead, where }));
 }

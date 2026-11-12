@@ -185,6 +185,27 @@ export function readStore(store, { timeout = 60000 } = {}) {
   }
 }
 
+/**
+ * Flip a bead's confirmation. Confirming labels `confirmed:<hash of the
+ * description as it is now>` (dropping any stale hash); un-confirming drops every
+ * `confirmed:*` label. Returns the new status. Throws on an unknown bead or store.
+ */
+export function toggleConfirm(store, bead) {
+  const exe = join(STORE_BIN, store);
+  if (!existsSync(exe)) throw new Error(`no wrapper at ${exe}`);
+  const { status, currentHash } = classifyBead(bead);
+  const stale = (bead.labels || []).map(String).filter((l) => l.startsWith(CONFIRM_PREFIX));
+  const run = (...args) => execFileSync(exe, ['label', ...args], { encoding: 'utf8', timeout: 30000 });
+  if (status === CONFIRMED) {
+    for (const l of stale) run('remove', bead.id, l);
+    return UNCONFIRMED;
+  }
+  if (!currentHash) throw new Error(`${bead.id} has no description to confirm`);
+  for (const l of stale) run('remove', bead.id, l);
+  run('add', bead.id, `${CONFIRM_PREFIX}${currentHash}`);
+  return CONFIRMED;
+}
+
 export function loadCorpus(stores) {
   const corpus = [];
   const failures = [];

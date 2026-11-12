@@ -7,6 +7,21 @@
     "node": "^22.13.0 || >=23.4.0"
   },
   "scripts": {
+    "resume:yaml:export": "bun resume-yaml.mjs export output/payload-posthog-product-owner.json --resume=resumes-61s",
+    "resume:yaml:diff": "bun resume-yaml.mjs apply output/resumes-61s.edit.yml output/payload-posthog-product-owner.json --resume=resumes-61s",
+    "resume:yaml:apply": "bun resume-yaml.mjs apply output/resumes-61s.edit.yml output/payload-posthog-product-owner.json --resume=resumes-61s --write && bun run resume:publish",
+    "resume:tree": "bun bead-tree.mjs resumes-61s",
+    "resume:typecheck": "bun bead-typecheck.mjs resumes-61s output/payload-posthog-product-owner.json",
+    "resume:json": "bun bead-resume-json.mjs output/payload-posthog-product-owner.json --resume=resumes-61s > output/resumes-61s.audit.json",
+    "resume:publish": "bun bead-resume-json.mjs output/payload-posthog-product-owner.json --resume=resumes-61s --to-bead=brain-3jmjo",
+    "resume:pdf:dense": "bun build-cv-html.mjs output/payload-posthog-product-owner.json output/cv-posthog-product-owner-dense.html templates/cv-template.compact.html && node generate-pdf.mjs output/cv-posthog-product-owner-dense.html output/cv-posthog-product-owner-dense.pdf --format=letter --allow-nonchronological",
+    "resume:layout": "bun ../resume-docx/layout-check.ts output/cv-posthog-product-owner-mid.pdf",
+    "resume:pdf:mid": "bun build-cv-html.mjs output/payload-posthog-product-owner.json output/cv-posthog-product-owner-mid.html templates/cv-template.compact-mid.html && node generate-pdf.mjs output/cv-posthog-product-owner-mid.html output/cv-posthog-product-owner-mid.pdf --format=letter --allow-nonchronological",
+    "resume:ts:typecheck": "bun bead-typecheck.mjs resumes-f3m output/payload-tailscale-ai-enablement.json",
+    "resume:ts:json": "bun bead-resume-json.mjs output/payload-tailscale-ai-enablement.json --resume=resumes-f3m > output/resumes-f3m.audit.json",
+    "resume:ts:pdf": "bun build-cv-html.mjs output/payload-tailscale-ai-enablement.json output/cv-tailscale-ai-enablement-mid.html templates/cv-template.compact-mid.html && node generate-pdf.mjs output/cv-tailscale-ai-enablement-mid.html output/cv-tailscale-ai-enablement-mid.pdf --format=letter --allow-nonchronological",
+    "resume:pdf": "bun build-cv-html.mjs output/payload-posthog-product-owner.json output/cv-posthog-product-owner-1page.html && node generate-pdf.mjs output/cv-posthog-product-owner-1page.html output/cv-posthog-product-owner-1page.pdf --format=letter --allow-nonchronological",
+    "resume:live": "bun lavish-live.mjs output/payload-posthog-product-owner.json --resume=resumes-61s --port=4388 --host=100.74.138.74 --base= --export-bead=brain-3jmjo --no-open",
     "doctor": "node doctor.mjs",
     "ui": "node scripts/ui-server.mjs",
     "or": "node openrouter-runner.mjs",
@@ -73,7 +88,8 @@
     "build:dashboard": "node build-dashboard.mjs",
     "serve:dashboard": "cd dashboard && go run .",
     "postinstall": "node -e \"process.exit(['','0','false'].includes((process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD||'').toLowerCase())?1:0)\" || npx playwright install chromium || npx playwright install chromium",
-    "manifesto": "node manifesto.mjs"
+    "manifesto": "node manifesto.mjs",
+    "resume:ts:sync": "bun resume-yaml.mjs sync-payload output/payload-tailscale-ai-enablement.json --resume=resumes-f3m"
   },
   "keywords": [
     "ai",
