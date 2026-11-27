@@ -280,6 +280,14 @@ ok('long NOTE lines come out folded', contactToVcard({ ...jane, notes: 'z'.repea
 ok('REV defaults to an ISO timestamp when not pinned', /REV:\d{4}-\d{2}-\d{2}T[\d:.]+Z/.test(contactToVcard(jane)));
 
 // ============================================================================
+// '-' in an optional channel cell means empty — never a real TEL/EMAIL/URL
+{
+  const { contacts: dashed } = parseContacts('Ada\tAcme\trecruiter\tCTO\t-\t-\t-\t-\tnote\n');
+  ok('dash channel cells parse as empty', dashed[0].phone === '' && dashed[0].email === '' && dashed[0].linkedin === '');
+  const dv = contactToVcard(dashed[0]);
+  ok('dash channel cells emit no TEL/EMAIL/URL line', !/^(TEL|EMAIL|URL)/m.test(dv));
+}
+
 // 8. buildVcf — CRLF discipline
 // ============================================================================
 console.log('\n--- 8. buildVcf ---');
