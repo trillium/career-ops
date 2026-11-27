@@ -129,7 +129,11 @@ export function parseContacts(content) {
     if (!t || t.startsWith('#')) continue;
     const cells = line.split('\t').map(c => unescapeFormulaCell(c.trim()));
     if (cells.length < 4) { quality.shortRows.push({ line: lineNo, cells: cells.length }); continue; }
-    const [name, company, type, title = '', phone = '', email = '', linkedin = '', tracker = ''] = cells;
+    const [name, company, type, title = '', rawPhone = '', rawEmail = '', rawLinkedin = '', tracker = ''] = cells;
+    // A literal '-' is the documented "empty" marker; it must never reach the
+    // vCard as a real TEL/EMAIL/URL value.
+    const dash = v => (v === '-' ? '' : v);
+    const phone = dash(rawPhone), email = dash(rawEmail), linkedin = dash(rawLinkedin);
     // notes is the LAST column: a stray tab pasted inside a note must not
     // silently drop the tail cells — everything past the 9th cell folds back
     // into notes (tab -> single space).
